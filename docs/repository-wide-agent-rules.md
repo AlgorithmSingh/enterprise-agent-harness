@@ -2,7 +2,7 @@
 type: Policy
 title: Repository-Wide Retrieval Agent Rules
 description: Defines the engineering, file-authority, evidence, safety, and documentation policy shared by every Retrieval harness gate.
-timestamp: 2026-08-12T08:40:00-04:00
+timestamp: 2026-08-12T14:30:00-04:00
 ---
 
 # Repository-Wide Retrieval Agent Rules
@@ -26,10 +26,10 @@ These rules explain the project policy referenced by `AGENTS.md`. They guide sem
 
 ## Preserve human and file authority
 
-- One focused gate works at a time and recommends rather than decides. Only the human selects a catalog-allowed transition.
+- One focused gate works at a time and recommends rather than decides. A catalog-allowed transition is selected by the human in manual and meta modes, or by the autopilot operator in the explicitly opted-in [autopilot mode](autopilot-design.md) — never by the gate worker itself, and always recorded durably (`decided_by_mode`) and, for autopilot, in the run's decision ledger.
 - The accepted run-scoped Phase 2 manifest controls exact implementation paths. A working-tree proposal never widens the current attempt's authority.
 - Do not write through symlinks, hard links, non-canonical paths, case-folded aliases, or glob-like spellings. Do not edit `.git`, the harness runtime, host adapters, vendored references, or run records from a generated-project gate.
-- File-tool guards do not turn an arbitrary shell into a filesystem sandbox. A human may approve a shell command only after inspecting its complete recorded bytes, resolved working directory, target paths, and effects; an approval must not be treated as permission to bypass the gate's declared authority.
+- File-tool guards do not turn an arbitrary shell into a filesystem sandbox. A shell command may be approved — by the human in manual and meta modes, or by the autopilot operator under its doctrine's deny list in autopilot mode — only after inspecting its complete recorded bytes, resolved working directory, target paths, and effects; an approval must not be treated as permission to bypass the gate's declared authority.
 - The gate result's changed-file list and the runtime's working-tree checks are declarative accounting, not an operating-system write barrier. Reviewers must reconcile the declared list with the actual diff before accepting a result.
 - B17 through B20 may transform the same explicitly planned file in order. Other writer overlap requires an explicit design reason and protected manifest authority.
 - B25 integrates without repairing, B26 records literal validation evidence, B27 validates independently, and BR repairs only the reported findings within the bounded manifest union.

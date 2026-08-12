@@ -807,6 +807,120 @@ test("manual commands cannot decide an attempt owned by the meta operator", asyn
   assert.equal(run.state.last_decision, null);
 });
 
+test("manual and meta commands cannot decide an attempt owned by the autopilot", async (t) => {
+  const { root } = await fixture(t);
+  await runStartCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "auto",
+    intake: {
+      targetRepoPath: root,
+      initialIdea: "Keep autopilot authority separate from the human surfaces."
+    },
+    launch: async () => ({ id: "auto-D01", mode: "auto" })
+  });
+  await writeReadyResult(root);
+
+  for (const foreignMode of ["manual", "meta"]) {
+    await assert.rejects(
+      runNextCommand({
+        repoRoot: root,
+        host: "pi",
+        sessionMode: foreignMode,
+        display: async () => assert.fail("a foreign-mode attempt must not be displayed for decision"),
+        decide: async () => assert.fail("a foreign-mode attempt must not be decided"),
+        launch: async () => assert.fail("a foreign-mode attempt must not transition")
+      }),
+      /owned by auto session mode/
+    );
+  }
+  const run = await loadActiveRun(root);
+  assert.equal(run.state.current_attempt.gate_id, "D01");
+  assert.equal(run.state.current_attempt.session.mode, "auto");
+  assert.equal(run.state.last_decision, null);
+});
+
+test("autopilot commands cannot decide an attempt owned by a human surface", async (t) => {
+  const { root } = await fixture(t);
+  await runStartCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "manual",
+    intake: {
+      targetRepoPath: root,
+      initialIdea: "Keep human-owned attempts out of autopilot reach."
+    },
+    launch: async () => ({ id: "manual-D01", mode: "manual" })
+  });
+  await writeReadyResult(root);
+
+  await assert.rejects(
+    runNextCommand({
+      repoRoot: root,
+      host: "pi",
+      sessionMode: "auto",
+      display: async () => assert.fail("a foreign-mode attempt must not be displayed for decision"),
+      decide: async () => assert.fail("a foreign-mode attempt must not be decided"),
+      launch: async () => assert.fail("a foreign-mode attempt must not transition")
+    }),
+    /owned by manual session mode/
+  );
+  const run = await loadActiveRun(root);
+  assert.equal(run.state.current_attempt.session.mode, "manual");
+  assert.equal(run.state.last_decision, null);
+});
+
+test("a commanding surface cannot record a gate session owned by another mode", async (t) => {
+  for (const session of [{ id: "mismatched-D01", mode: "manual" }, { id: "unmarked-D01" }]) {
+    const { root } = await fixture(t);
+    await assert.rejects(
+      runStartCommand({
+        repoRoot: root,
+        host: "pi",
+        sessionMode: "auto",
+        intake: {
+          targetRepoPath: root,
+          initialIdea: "Refuse a launch whose recorded owner contradicts its kickoff."
+        },
+        launch: async () => ({ ...session })
+      }),
+      /commanded by auto session mode may not record a manual-owned gate session/
+    );
+    const run = await loadActiveRun(root);
+    assert.equal(run.state.current_attempt, null);
+    assert.deepEqual(run.state.attempts, {});
+  }
+});
+
+test("an auto-owned decision records its deciding surface durably", async (t) => {
+  const { root } = await fixture(t);
+  await runStartCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "auto",
+    intake: {
+      targetRepoPath: root,
+      initialIdea: "Record who decided in the durable run state."
+    },
+    launch: async () => ({ id: "auto-D01", mode: "auto" })
+  });
+  await writeReadyResult(root);
+
+  const outcome = await runNextCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "auto",
+    display: async () => {},
+    decide: async () => ({ decision: "approve" }),
+    launch: async (packet) => ({ id: `auto-${packet.gate.id}`, mode: "auto" })
+  });
+  assert.equal(outcome.kind, "launched");
+  const run = await loadActiveRun(root);
+  assert.equal(run.state.last_decision.gate_id, "D01");
+  assert.equal(run.state.last_decision.decided_by_mode, "auto");
+  assert.equal(run.state.current_attempt.session.mode, "auto");
+});
+
 test("two concurrent commands can commit at most one decision for an attempt", async (t) => {
   const { root } = await fixture(t);
   const trace = [];
@@ -1521,7 +1635,9 @@ test("OpenCode and Pi execute the same shared command plan", async (t) => {
 test("both host adapters delegate command ownership to the shared runtime", async () => {
   for (const relative of [
     ".opencode/retrieval-phase-workflow.ts",
-    ".pi/extensions/retrieval-phase.ts"
+    ".opencode/retrieval-operator-tools.ts",
+    ".pi/extensions/retrieval-phase.ts",
+    ".pi/extensions/retrieval-meta-operator.ts"
   ]) {
     const source = await readFile(path.join(repositoryRoot, relative), "utf8");
     assert.match(source, /\brunStartCommand\b/, `${relative} must delegate /retrieval-phase`);

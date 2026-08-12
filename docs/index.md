@@ -10,6 +10,7 @@
 - [Retrieval Harness Operator Quick Reference](operator-quick-reference.md) — The manual commands, human decisions, run states, result envelope, and recovery behavior.
 - [Retrieval Harness Project-Local Installation](project-local-installation.md) — How to place, configure, load, and deterministically verify the adapters and the optional meta-operator.
 - [Retrieval Harness Meta-Operator Design](meta-operator-design.md) — The optional visible operator, background gate worker, generic supervisor reuse, and exact human authorization.
+- [Autopilot Mode Design](autopilot-design.md) — The fully autonomous operating mode: one visible operator agent taking every routine decision under a binding judgment doctrine, with a decision ledger and critical-blocker-only escalation.
 
 ## Reference
 

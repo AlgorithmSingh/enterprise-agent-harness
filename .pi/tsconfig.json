@@ -12,5 +12,9 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["extensions/retrieval-meta-operator.ts", "extensions/retrieval-phase.ts"]
+  "include": [
+    "extensions/retrieval-autopilot.ts",
+    "extensions/retrieval-meta-operator.ts",
+    "extensions/retrieval-phase.ts"
+  ]
 }

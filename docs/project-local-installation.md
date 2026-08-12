@@ -1,8 +1,8 @@
 ---
 type: Guide
 title: Retrieval Harness Project-Local Installation
-description: Explains how to place, configure, load, and deterministically verify the Retrieval OpenCode and Pi adapters and their optional meta-operator.
-timestamp: 2026-08-12T08:40:00-04:00
+description: Explains how to place, configure, load, and deterministically verify the Retrieval OpenCode and Pi adapters and their optional meta-operator and autopilot modes.
+timestamp: 2026-08-12T14:30:00-04:00
 ---
 
 # Retrieval Harness Project-Local Installation
@@ -21,7 +21,7 @@ docs/
 reference/python-typescript-swift-sequence/
 ```
 
-Pi's `.pi/settings.json` force-excludes `extensions/retrieval-meta-operator.ts` from normal discovery. This keeps the optional `meta-harness` dependency out of ordinary manual startups while auto-loading `.pi/extensions/retrieval-phase.ts`.
+Pi's `.pi/settings.json` force-excludes `extensions/retrieval-meta-operator.ts` and `extensions/retrieval-autopilot.ts` from normal discovery. This keeps the optional `meta-harness` dependency out of ordinary manual startups while auto-loading `.pi/extensions/retrieval-phase.ts`.
 
 ## Deterministic setup
 
@@ -50,7 +50,15 @@ Select the `retrieval-operator` agent in OpenCode for meta mode. In Pi, opt in e
 pi -e .pi/extensions/retrieval-meta-operator.ts
 ```
 
-Do not remove Pi's normal-discovery exclusion to enable this mode. A successful local install proves package and adapter compatibility, not live backend credentials (gh auth, Atlassian MCP consent, Datadog keys), provider behavior, generated-system correctness, or deployment.
+For the fully autonomous [autopilot mode](autopilot-design.md), select the `retrieval-autopilot` agent in OpenCode, or in Pi:
+
+```sh
+pi -e .pi/extensions/retrieval-autopilot.ts
+```
+
+Autopilot uses the same model-role files (the background `gate` role is required) and keeps its own supervisor state under `.opencode/.retrieval-auto/` and `.pi/.retrieval-auto/`. Load exactly one operator surface per run — manual, meta, or autopilot; mode ownership fails closed on crossover regardless. Opting into autopilot accepts its documented trust boundary: the operator agent takes gate decisions and approves worker shell commands itself, recording every authority action in the run's decision ledger.
+
+Do not remove Pi's normal-discovery exclusions to enable these modes. A successful local install proves package and adapter compatibility, not live backend credentials (gh auth, Atlassian MCP consent, Datadog keys), provider behavior, generated-system correctness, or deployment.
 
 ## Interactive smoke conditions
 

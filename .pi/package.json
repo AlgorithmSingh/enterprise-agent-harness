@@ -6,7 +6,7 @@
   "scripts": {
     "check:dist": "node node_modules/meta-harness/scripts/assert-fresh-dist.mjs",
     "typecheck": "npm run check:dist && tsc --noEmit",
-    "test": "npm run typecheck && node --experimental-strip-types --test ../test/pi-meta-operator.test.mjs ../test/pi-adapter-contract.test.mjs"
+    "test": "npm run typecheck && node --experimental-strip-types --test ../test/pi-meta-operator.test.mjs ../test/pi-autopilot.test.mjs ../test/pi-adapter-contract.test.mjs"
   },
   "dependencies": {
     "meta-harness": "file:../../adk-harness/meta-harness"

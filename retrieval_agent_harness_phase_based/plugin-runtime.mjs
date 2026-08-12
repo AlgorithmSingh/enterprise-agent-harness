@@ -462,7 +462,7 @@ function validateRunState(state, pointer) {
       typeof attempt.session.host !== "string" ||
       typeof attempt.session.id !== "string" ||
       !attempt.session.id.trim() ||
-      !["manual", "meta"].includes(attempt.session.mode) ||
+      !["manual", "meta", "auto"].includes(attempt.session.mode) ||
       (attempt.session.path !== undefined && typeof attempt.session.path !== "string") ||
       !["pending", "delivered"].includes(attempt.delivery_status)
     )
@@ -758,7 +758,7 @@ export async function routeDecision(
   return route;
 }
 
-async function launchPacket(repoRoot, workflow, run, host) {
+async function launchPacket(repoRoot, workflow, run, host, sessionMode = undefined) {
   if (run.state.status !== "active" || !run.state.active_gate_id) {
     fail("there is no active gate to launch");
   }
@@ -840,7 +840,9 @@ async function launchPacket(repoRoot, workflow, run, host) {
     "```",
     "",
     "Do not edit run control state, runtime or host adapters, the catalog, or the vendored reference. " +
-      "Keep the handoff short. The human reviews and advances with /retrieval-phase-next."
+      (sessionMode === "auto"
+        ? "Keep the handoff short. The supervising autopilot operator reviews this result and advances the run."
+        : "Keep the handoff short. The human reviews and advances with /retrieval-phase-next.")
   ].join("\n");
 
   return {
@@ -862,7 +864,7 @@ async function launchPacket(repoRoot, workflow, run, host) {
   };
 }
 
-export async function recordLaunch(run, packet, session, catalogRecord) {
+export async function recordLaunch(run, packet, session, catalogRecord, sessionMode = undefined) {
   const state = structuredClone(run.state);
   if (
     state.status !== "active" ||
@@ -877,8 +879,15 @@ export async function recordLaunch(run, packet, session, catalogRecord) {
   if (!session || typeof session.id !== "string" || !session.id.trim()) {
     fail("a launched gate session requires a non-empty host session id");
   }
-  if (!["manual", "meta"].includes(mode)) {
-    fail("a launched gate session mode must be manual or meta");
+  if (!["manual", "meta", "auto"].includes(mode)) {
+    fail("a launched gate session mode must be manual, meta, or auto");
+  }
+  // The kickoff packet is written for the commanding surface, so an attempt may
+  // never be recorded under a different owner than the one that shaped it.
+  if (sessionMode && mode !== sessionMode) {
+    fail(
+      `a launch commanded by ${sessionMode} session mode may not record a ${mode}-owned gate session`
+    );
   }
   state.current_attempt = {
     gate_id: packet.gate.id,
@@ -1246,6 +1255,7 @@ function stateAfterDecision(workflow, run, review, decision, reason, route, cand
     attempt: review.attempt.number,
     decision,
     reason: reason?.trim() || null,
+    decided_by_mode: review.attempt.session?.mode ?? "manual",
     selected_at: new Date().toISOString()
   };
 
@@ -1259,15 +1269,15 @@ function stateAfterDecision(workflow, run, review, decision, reason, route, cand
   return state;
 }
 
-async function launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch) {
+async function launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode = undefined) {
   const beforeLaunch = structuredClone(run.state);
   await verifyCatalogSnapshot(run, catalogRecord);
-  const packet = await launchPacket(repoRoot, workflow, run, host);
+  const packet = await launchPacket(repoRoot, workflow, run, host, sessionMode);
   await verifyCatalogSnapshot(run, catalogRecord);
   let recorded = false;
   const record = async (session) => {
     if (recorded) fail("the launch session was already recorded");
-    await recordLaunch(run, packet, session, catalogRecord);
+    await recordLaunch(run, packet, session, catalogRecord, sessionMode);
     recorded = true;
   };
   try {
@@ -1327,7 +1337,8 @@ async function recoverPendingLaunch(
   host,
   launch,
   retirePendingSession,
-  reason
+  reason,
+  sessionMode = undefined
 ) {
   if (typeof retirePendingSession !== "function") {
     fail("pending kickoff recovery requires a host session-retirement callback");
@@ -1352,7 +1363,7 @@ async function recoverPendingLaunch(
   state.current_attempt = null;
   state.pending_direction = reason?.trim() || "The human confirmed that the prior kickoff was not delivered.";
   await writeState(run, state);
-  return launchAndRecord(run.repoRoot, workflow, catalogRecord, run, host, launch);
+  return launchAndRecord(run.repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
 }
 
 /**
@@ -1365,7 +1376,7 @@ async function recoverPendingLaunch(
  *   recoverPendingLaunch?: boolean,
  *   confirmPendingDelivery?: boolean,
  *   expectedPendingLaunch?: any,
- *   sessionMode?: "manual" | "meta",
+ *   sessionMode?: "manual" | "meta" | "auto",
  *   retirePendingSession?: (session: any) => Promise<void>
  * }} input
  */
@@ -1419,7 +1430,7 @@ export async function runStartCommand({
     if (created) {
       return withLockRelease(releaseTransition, "transition lock", async () => {
         run = await currentLockedRun(run);
-        return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch);
+        return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
       });
     }
   }
@@ -1461,7 +1472,8 @@ export async function runStartCommand({
         host,
         launch,
         retirePendingSession,
-        resumeReason
+        resumeReason,
+        sessionMode
       );
     });
   }
@@ -1482,7 +1494,7 @@ export async function runStartCommand({
       state.stop_reason = null;
       state.pending_direction = resumeReason.trim();
       await writeState(run, state);
-      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch);
+      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
     });
   }
   if (!run.state.current_attempt) {
@@ -1491,7 +1503,7 @@ export async function runStartCommand({
     return withLockRelease(release, "transition lock", async () => {
       run = await currentLockedRun(run);
       if (run.state.current_attempt) return { kind: "ready", run };
-      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch);
+      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
     });
   }
   const review = await inspectCurrentResult(workflow, run);
@@ -1505,7 +1517,7 @@ export async function runStartCommand({
  *   display?: (review: any) => Promise<void>,
  *   decide?: (review: any) => Promise<any>,
  *   launch: (packet: any, record: (session: any) => Promise<void>) => Promise<any>,
- *   sessionMode?: "manual" | "meta",
+ *   sessionMode?: "manual" | "meta" | "auto",
  *   afterDecision?: (run: any) => Promise<void>,
  *   beforeDecisionCommit?: (run: any, review: any) => Promise<void>,
  *   afterReviewSnapshot?: (run: any, review: any) => Promise<void>
@@ -1544,7 +1556,7 @@ export async function runNextCommand({
         const review = await inspectCurrentResult(workflow, run);
         return { kind: review.status, run, review };
       }
-      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch);
+      return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
     });
   }
 
@@ -1614,6 +1626,6 @@ export async function runNextCommand({
     if (run.state.status !== "active") {
       return { kind: run.state.status, run, review: currentReview };
     }
-    return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch);
+    return await launchAndRecord(repoRoot, workflow, catalogRecord, run, host, launch, sessionMode);
   });
 }

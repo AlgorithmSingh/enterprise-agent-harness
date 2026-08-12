@@ -1,17 +1,24 @@
 /**
- * Pi meta-operator extension. The visible premium session stays active and
- * gains three tools (retrieval_meta_run / retrieval_meta_gate / retrieval_meta_transition); each
- * background gate runs in one extension-owned in-process worker created with
- * createAgentSession({ model: <explicit background gate model>, ... }) — never
- * ctx.newSession(). The child's model run is started asynchronously: launch
- * and send return after safe kickoff/preflight, so a child blocked inside
- * ask_operator can be answered by later tool calls in the parent session.
- * Human-required decisions use the parent TUI (ctx.mode === "tui"):
- * kickoff/resume values are collected or exactly confirmed there, permission
- * approvals show the complete recorded call with its hash, and transition
- * commits confirm the full exact canonical confirmation bytes inside the
- * runtime decide callback. The shared runtime remains the only authority for
- * workflow state and human-selected transitions.
+ * Pi supervised-operator core, shared by two surfaces. The visible premium
+ * session stays active and gains three tools (retrieval_meta_run /
+ * retrieval_meta_gate / retrieval_meta_transition, or their retrieval_auto_*
+ * counterparts); each background gate runs in one extension-owned in-process
+ * worker created with createAgentSession({ model: <explicit background gate
+ * model>, ... }) — never ctx.newSession(). The child's model run is started
+ * asynchronously: launch and send return after safe kickoff/preflight, so a
+ * child blocked inside ask_operator can be answered by later tool calls in the
+ * parent session.
+ *
+ * The "meta" surface (default) requires the parent TUI (ctx.mode === "tui")
+ * for every authority action: kickoff/resume values are collected or exactly
+ * confirmed there, permission approvals show the complete recorded call with
+ * its hash, and transition commits confirm the full exact canonical
+ * confirmation bytes inside the runtime decide callback. The "auto" surface
+ * replaces those human checkpoints with agent-supplied arguments and records
+ * each one, with its rationale, in the run's autopilot ledger; it keeps every
+ * fail-closed check the meta surface performs, adds bounded-loop caps, and
+ * needs no TUI. The shared runtime remains the only authority for workflow
+ * state and committed transitions on both surfaces.
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -46,12 +53,82 @@ import {
   runStartCommand,
 } from "../../retrieval_agent_harness_phase_based/plugin-runtime.mjs";
 import { buildTransitionBinding } from "../../retrieval_agent_harness_phase_based/meta-review-binding.mjs";
+import { appendAutopilotLedger } from "../../retrieval_agent_harness_phase_based/autopilot-ledger.mjs";
 import { createGateToolGuard, untilAborted } from "./retrieval-phase.ts";
 
 const MODEL_CONFIG_FILE = ".pi/retrieval-operator-models.json";
-const STATE_FILE = ".pi/.retrieval-meta/state.json";
-const RECOVERY_FILE = ".pi/.retrieval-meta/launch-recovery.json";
 const RULE_FILES = ["AGENTS.md", "retrieval_agent_harness_phase_based/_SHARED-RETRIEVAL-ENGINEERING-RULES.md"];
+
+/** Which supervised operator surface a core instance serves. */
+export type OperatorSurface = "meta" | "auto";
+
+/**
+ * Everything one surface owns exclusively: its runtime session mode, its own
+ * supervisor state (the two surfaces never share a state file), and the way it
+ * describes its own authority to the background worker. A worker supervised by
+ * the autopilot must not be told that a human approves its shell calls.
+ */
+interface SurfaceConfig {
+  readonly mode: OperatorSurface;
+  readonly operatorName: string;
+  readonly stateFile: string;
+  readonly recoveryFile: string;
+  readonly boundaryHeading: string;
+  readonly workerRole: string;
+  readonly askRule: string;
+  readonly askLabel: string;
+  readonly askDescription: string;
+  readonly noteHeading: string;
+  readonly intakeProvenance: string;
+}
+
+const SURFACES: Record<OperatorSurface, SurfaceConfig> = {
+  meta: {
+    mode: "meta",
+    operatorName: "meta-operator",
+    stateFile: ".pi/.retrieval-meta/state.json",
+    recoveryFile: ".pi/.retrieval-meta/launch-recovery.json",
+    boundaryHeading: "# Pi meta-operated gate boundary",
+    workerRole: "You are a background gate worker supervised by a meta-operator.",
+    askRule:
+      "Use the ask_operator tool for one focused question when blocked; bash requires relayed human approval.",
+    askLabel: "Ask the meta-operator",
+    askDescription:
+      "Ask the supervising meta-operator one focused question when blocked. Material questions are relayed to the human.",
+    noteHeading: "Meta-operator note (advisory; not a human gate decision):",
+    intakeProvenance: "retrieval_meta_run(start) parent-TUI intake",
+  },
+  auto: {
+    mode: "auto",
+    operatorName: "autopilot operator",
+    stateFile: ".pi/.retrieval-auto/state.json",
+    recoveryFile: ".pi/.retrieval-auto/launch-recovery.json",
+    boundaryHeading: "# Pi autopilot-operated gate boundary",
+    workerRole: "You are a background gate worker supervised by an autopilot operator.",
+    askRule:
+      "Use the ask_operator tool for one focused question when blocked; bash requires the autopilot operator's recorded approval.",
+    askLabel: "Ask the autopilot operator",
+    askDescription:
+      "Ask the supervising autopilot operator one focused question when blocked. Questions beyond its authority are escalated to the human.",
+    noteHeading: "Autopilot operator note (advisory; not a gate decision):",
+    intakeProvenance: "retrieval_auto_run(start) autopilot intake",
+  },
+};
+
+/**
+ * Bounded-loop caps for unattended operation. A third attempt at one gate and
+ * a forty-launch run are refused as escalations rather than looped through.
+ */
+const REVISE_ATTEMPT_CAP = 3;
+const RUN_LAUNCH_CAP = 40;
+
+/**
+ * meta-harness ResolutionSource has no value for an agent-authored resolution.
+ * The autopilot must never record its own decisions as "human", so every
+ * operator-authored resolution keeps the operator-scoped source and the exact
+ * authorship, answer, and rationale live in the autopilot ledger.
+ */
+const OPERATOR_RESOLUTION_SOURCE = "operator-reject" as const;
 
 /** Installed Pi 0.80.6 thinking levels; anything else fails closed. */
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -60,6 +137,16 @@ export interface RequestOutcome {
   approved: boolean;
   answer: string | null;
   reason: string | null;
+}
+
+/** The exact immutable launch a child session is bound to. */
+export interface AttemptIdentity {
+  runId: string;
+  gateId: string;
+  number: number;
+  launchId: string;
+  /** Supervised surface that owns the attempt; absent means the meta surface. */
+  sessionMode?: OperatorSurface;
 }
 
 export interface PiWorkerHandle {
@@ -91,7 +178,7 @@ export interface CreateWorkerInput {
   thinkingLevel: string | null;
   systemPrompt: string;
   guard: { gateResultFile: string; editableFiles: string[]; collaborativeEditPaths: string[] };
-  attempt: { runId: string; gateId: string; number: number; launchId: string };
+  attempt: AttemptIdentity;
   /** Resume this exact persisted session file instead of creating a new one. */
   resumeSessionPath: string | null;
   onRequest: (request: { kind: "question" | "permission"; payload: string }) => Promise<RequestOutcome>;
@@ -122,7 +209,7 @@ interface UiLike {
   notify(message: string, type?: "info" | "warning" | "error"): void;
 }
 
-interface OperatorContextLike {
+export interface OperatorContextLike {
   cwd: string;
   mode: string;
   hasUI: boolean;
@@ -252,7 +339,7 @@ function isPiRecoveryRecord(value: unknown): value is PiLaunchRecoveryRecord {
 
 export async function metaAttemptIsCurrent(
   cwd: string,
-  expected: { runId: string; gateId: string; number: number; launchId: string },
+  expected: AttemptIdentity,
   sessionId: string,
   sessionPath: string | null,
 ): Promise<boolean> {
@@ -267,7 +354,7 @@ export async function metaAttemptIsCurrent(
       attempt?.number === expected.number &&
       attempt?.launch_id === expected.launchId &&
       attempt?.session?.host === "pi" &&
-      attempt?.session?.mode === "meta" &&
+      attempt?.session?.mode === (expected.sessionMode ?? "meta") &&
       attempt?.session?.id === sessionId &&
       (attempt?.session?.path ?? null) === sessionPath
   );
@@ -289,6 +376,7 @@ export class PiMetaOperatorCore {
   readonly #bindings: PiHostBindings;
   readonly #actions = new SerialQueue();
   readonly #ownership: SupervisorOwnership | undefined;
+  readonly #surface: SurfaceConfig;
   #supervisor: MetaSupervisor | null = null;
   #policy: ModelRolePolicy | null = null;
   #cwd: string | null = null;
@@ -296,14 +384,71 @@ export class PiMetaOperatorCore {
   #worker: PiWorkerHandle | null = null;
   #deferred: { requestId: string; resolve: (outcome: RequestOutcome) => void } | null = null;
 
-  constructor(bindings: PiHostBindings, options?: { ownership?: SupervisorOwnership }) {
+  constructor(
+    bindings: PiHostBindings,
+    options?: { ownership?: SupervisorOwnership; surface?: OperatorSurface }
+  ) {
     this.#bindings = bindings;
     this.#ownership = options?.ownership;
+    this.#surface = SURFACES[options?.surface ?? "meta"];
   }
 
   /** Test seam: the in-memory worker handle for the current process. */
   get workerHandle(): PiWorkerHandle | null {
     return this.#worker;
+  }
+
+  /** The runtime session mode this core launches, records, and reviews. */
+  get surface(): OperatorSurface {
+    return this.#surface.mode;
+  }
+
+  get #isAuto(): boolean {
+    return this.#surface.mode === "auto";
+  }
+
+  /**
+   * Auto surface only: record one authority action in the run's ledger. The
+   * ledger is evidence, not authority, but an action the human cannot audit
+   * afterwards must not happen, so a failure here fails its caller.
+   */
+  async #ledger(cwd: string, entry: Record<string, unknown>, runDir?: string): Promise<void> {
+    if (!this.#isAuto) return;
+    const directory = runDir ?? (await loadActiveRun(cwd))?.runDir;
+    if (!directory) {
+      throw new Error("no active run directory exists for the autopilot ledger");
+    }
+    await appendAutopilotLedger(directory, entry);
+  }
+
+  /** Ledger the escalation and hand the agent the structured refusal. */
+  async #escalate(
+    cwd: string,
+    escalation: { kind: string; detail: string; [field: string]: unknown },
+    runDir?: string
+  ): Promise<string> {
+    await this.#ledger(
+      cwd,
+      { event: "escalation", kind: escalation.kind, detail: escalation.detail },
+      runDir
+    );
+    return json({ outcome: "escalation_required", ...escalation });
+  }
+
+  /**
+   * Refuse to start further gate work once the run has consumed its launch
+   * budget. Completing an already-committed transition (recovery) is exempt:
+   * refusing there would strand the run in a state only recovery can leave.
+   */
+  async #launchBudgetExceeded(cwd: string): Promise<number | null> {
+    if (!this.#isAuto) return null;
+    const run = await loadActiveRun(cwd).catch(() => null);
+    if (!run) return null;
+    const total = Object.values(run.state.attempts ?? {}).reduce(
+      (sum: number, value) => sum + (typeof value === "number" ? value : 0),
+      0
+    );
+    return total >= RUN_LAUNCH_CAP ? total : null;
   }
 
   async #ready(ctx: OperatorContextLike): Promise<{
@@ -313,7 +458,7 @@ export class PiMetaOperatorCore {
     recoveryStore: MetaStateStore;
   }> {
     if (!ctx.isProjectTrusted()) {
-      throw new Error("the meta-operator requires a trusted project");
+      throw new Error(`the ${this.#surface.operatorName} requires a trusted project`);
     }
     const cwd = path.resolve(ctx.cwd);
     if (this.#supervisor !== null && this.#cwd !== cwd) {
@@ -321,7 +466,7 @@ export class PiMetaOperatorCore {
       // claim before adopting a new one, and never while a child is live.
       if (this.#worker !== null) {
         throw new Error(
-          `a meta-operated worker is still live for ${this.#cwd}; abort or release it before operating on ${cwd}`
+          `a ${this.#surface.mode}-operated worker is still live for ${this.#cwd}; abort or release it before operating on ${cwd}`
         );
       }
       await this.#supervisor.releaseOwnership();
@@ -331,15 +476,15 @@ export class PiMetaOperatorCore {
     }
     if (this.#supervisor === null) {
       this.#supervisor = await MetaSupervisor.load({
-        store: new FileMetaStateStore(path.join(cwd, STATE_FILE)),
+        store: new FileMetaStateStore(path.join(cwd, this.#surface.stateFile)),
         ...(this.#ownership ? { ownership: this.#ownership } : {}),
       });
       this.#policy = await readModelPolicy(cwd);
-      this.#recoveryStore = new FileMetaStateStore(path.join(cwd, RECOVERY_FILE));
+      this.#recoveryStore = new FileMetaStateStore(path.join(cwd, this.#surface.recoveryFile));
       this.#cwd = cwd;
     }
     this.#policy ??= await readModelPolicy(cwd);
-    this.#recoveryStore ??= new FileMetaStateStore(path.join(cwd, RECOVERY_FILE));
+    this.#recoveryStore ??= new FileMetaStateStore(path.join(cwd, this.#surface.recoveryFile));
     this.#assertOperatorModel(ctx);
     return { supervisor: this.#supervisor, policy: this.#policy, cwd, recoveryStore: this.#recoveryStore };
   }
@@ -504,7 +649,7 @@ export class PiMetaOperatorCore {
   ) {
     return async (
       packet: GateLaunchPacketLike,
-      record: (session: { id: string; path: string; mode?: "manual" | "meta" }) => Promise<void>
+      record: (session: { id: string; path: string; mode?: "manual" | "meta" | "auto" }) => Promise<void>
     ): Promise<{ id: string; path: string }> => {
       const gateModel = requireGateModel(policy, MODEL_CONFIG_FILE);
       const worker = await supervisor.beginLaunch({
@@ -522,11 +667,11 @@ export class PiMetaOperatorCore {
           systemPrompt: [
             packet.system,
             "",
-            "# Pi meta-operated gate boundary",
+            this.#surface.boundaryHeading,
             "",
-            "You are a background gate worker supervised by a meta-operator.",
+            this.#surface.workerRole,
             `The only writable workflow-control file is ${packet.gate_result_file}.`,
-            "Use the ask_operator tool for one focused question when blocked; bash requires relayed human approval.",
+            this.#surface.askRule,
           ].join("\n"),
           guard: {
             gateResultFile: packet.gate_result_file,
@@ -542,6 +687,7 @@ export class PiMetaOperatorCore {
             gateId: packet.gate.id,
             number: packet.attempt,
             launchId: packet.launch_id,
+            sessionMode: this.#surface.mode,
           },
           resumeSessionPath: null,
           onRequest: this.#handleWorkerRequest(supervisor),
@@ -555,7 +701,7 @@ export class PiMetaOperatorCore {
           recoveryStore,
         );
         const identity = { id: handle.sessionId, path: handle.sessionPath ?? "" };
-        await record({ ...identity, mode: "meta" });
+        await record({ ...identity, mode: this.#surface.mode });
         runtimeRecorded = true;
         await supervisor.recordWorkerSession({
           workerId: worker.workerId,
@@ -746,7 +892,7 @@ export class PiMetaOperatorCore {
       }
 
       if (args.action === "start") {
-        this.#requireTui(ctx, "starting a run");
+        if (!this.#isAuto) this.#requireTui(ctx, "starting a run");
         requireGateModel(policy, MODEL_CONFIG_FILE);
         // Kickoff values become approved context; they are either typed by
         // the human here, or exactly confirmed by the human here. A
@@ -754,7 +900,14 @@ export class PiMetaOperatorCore {
         let targetRepoPath = args.targetRepoPath?.trim();
         let initialIdea = args.initialIdea?.trim();
         let intake: { targetRepoPath: string; initialIdea: string } | undefined;
-        if (targetRepoPath && initialIdea) {
+        if (this.#isAuto) {
+          // The autopilot restates the human's conversational request as the
+          // exact kickoff bytes; there is no dialog to confirm them.
+          if (!targetRepoPath || !initialIdea) {
+            throw new Error("start requires both targetRepoPath and initialIdea");
+          }
+          intake = { targetRepoPath, initialIdea };
+        } else if (targetRepoPath && initialIdea) {
           const confirmed = await ctx.ui.confirm(
             "Start the Retrieval run with these exact kickoff values?",
             [
@@ -791,26 +944,56 @@ export class PiMetaOperatorCore {
         const outcome = (await runStartCommand({
           repoRoot: cwd,
           host: "pi",
-          sessionMode: "meta",
+          sessionMode: this.#surface.mode,
           intake,
           resumeReason: undefined,
           launch: this.#metaLaunch(supervisor, policy, ctx, cwd, recoveryStore),
         })) as WorkflowOutcomeLike;
         if (outcome.kind === "launched" && outcome.run) {
           await this.#seedApprovedContext(supervisor, cwd, intake, outcome.run.state.run_id);
+          await this.#ledger(cwd, {
+            event: "run_started",
+            initial_idea: intake.initialIdea,
+            target_repo_path: intake.targetRepoPath,
+          });
         }
         return json(describeOutcome(outcome));
       }
 
       if (args.action === "recover") {
-        this.#requireTui(ctx, "recovering an interrupted launch");
+        if (!this.#isAuto) this.#requireTui(ctx, "recovering an interrupted launch");
         return json(await this.#recoverAction(supervisor, policy, ctx, cwd, recoveryStore));
       }
 
       // resume
-      this.#requireTui(ctx, "resuming a blocked run");
+      if (!this.#isAuto) this.#requireTui(ctx, "resuming a blocked run");
       requireGateModel(policy, MODEL_CONFIG_FILE);
       let resumeReason = args.resumeReason?.trim();
+      if (this.#isAuto) {
+        if (!resumeReason) {
+          throw new Error("resume requires a non-empty resumeReason");
+        }
+        const spent = await this.#launchBudgetExceeded(cwd);
+        if (spent !== null) {
+          return await this.#escalate(cwd, {
+            kind: "launch_cap",
+            detail: `the run has already launched ${spent} gate attempts (cap ${RUN_LAUNCH_CAP}); resuming would start another`,
+            total_attempts: spent,
+          });
+        }
+        const outcome = (await runStartCommand({
+          repoRoot: cwd,
+          host: "pi",
+          sessionMode: this.#surface.mode,
+          intake: undefined,
+          resumeReason,
+          launch: this.#metaLaunch(supervisor, policy, ctx, cwd, recoveryStore),
+        })) as WorkflowOutcomeLike;
+        if (outcome.kind === "launched") {
+          await this.#ledger(cwd, { event: "run_resumed", resume_reason: resumeReason });
+        }
+        return json(describeOutcome(outcome));
+      }
       if (resumeReason) {
         const confirmed = await ctx.ui.confirm(
           "Resume the blocked run with this exact direction?",
@@ -830,7 +1013,7 @@ export class PiMetaOperatorCore {
       const outcome = (await runStartCommand({
         repoRoot: cwd,
         host: "pi",
-        sessionMode: "meta",
+        sessionMode: this.#surface.mode,
         intake: undefined,
         resumeReason,
         launch: this.#metaLaunch(supervisor, policy, ctx, cwd, recoveryStore),
@@ -848,12 +1031,12 @@ export class PiMetaOperatorCore {
     await supervisor.approveFact({
       runId,
       text: `Kickoff target repository: ${intake.targetRepoPath}`,
-      provenance: { kind: "kickoff", source: "retrieval_meta_run(start) parent-TUI intake" },
+      provenance: { kind: "kickoff", source: this.#surface.intakeProvenance },
     });
     await supervisor.approveFact({
       runId,
       text: `Kickoff initial idea: ${intake.initialIdea}`,
-      provenance: { kind: "kickoff", source: "retrieval_meta_run(start) parent-TUI intake" },
+      provenance: { kind: "kickoff", source: this.#surface.intakeProvenance },
     });
     const { readFile } = await import("node:fs/promises");
     for (const ruleFile of RULE_FILES) {
@@ -906,8 +1089,14 @@ export class PiMetaOperatorCore {
       | null
       | undefined;
     if (attempt) {
-      if (attempt.session?.host !== "pi" || attempt.session.mode !== "meta" || !attempt.session.id) {
-        throw new Error("the recorded attempt does not belong to a Pi meta-operated session");
+      if (
+        attempt.session?.host !== "pi" ||
+        attempt.session.mode !== this.#surface.mode ||
+        !attempt.session.id
+      ) {
+        throw new Error(
+          `the recorded attempt does not belong to a Pi ${this.#surface.mode}-operated session`
+        );
       }
       const raw = await recoveryStore.load();
       if (
@@ -954,6 +1143,7 @@ export class PiMetaOperatorCore {
             gateId: raw.gate_id,
             number: raw.attempt,
             launchId: attempt.launch_id,
+            sessionMode: this.#surface.mode,
           },
           resumeSessionPath: raw.session_path,
           onRequest: this.#handleWorkerRequest(supervisor),
@@ -1001,7 +1191,7 @@ export class PiMetaOperatorCore {
     const outcome = (await runNextCommand({
       repoRoot: cwd,
       host: "pi",
-      sessionMode: "meta",
+      sessionMode: this.#surface.mode,
       display: async () => {},
       decide: async () => null,
       afterDecision: async () => {},
@@ -1010,7 +1200,7 @@ export class PiMetaOperatorCore {
     if (outcome.kind === "cancelled") {
       return {
         outcome: "decision_required",
-        note: "The active gate has a ready result; recovery does not decide gates. Use retrieval_meta_transition.",
+        note: `The active gate has a ready result; recovery does not decide gates. Use retrieval_${this.#surface.mode}_transition.`,
       };
     }
     return { outcome: "recovered", ...describeOutcome(outcome) };
@@ -1033,7 +1223,11 @@ export class PiMetaOperatorCore {
       requestId?: string;
       answer?: string;
       citedFactIds?: string[];
-      source?: "approved-context" | "human";
+      source?: "approved-context" | "human" | "auto-operator";
+      /** Auto surface: the operator's own recorded justification. */
+      rationale?: string;
+      /** Auto surface: the explicit shell verdict. */
+      approve?: boolean;
       reason?: string;
       timeoutSeconds?: number;
     }
@@ -1082,9 +1276,7 @@ export class PiMetaOperatorCore {
           throw new Error("a correlated request is pending; reply or reject before sending follow-ups");
         }
         if (!args.message?.trim()) throw new Error("send requires a non-empty message");
-        await this.#worker.send(
-          `Meta-operator note (advisory; not a human gate decision):\n${args.message.trim()}`
-        );
+        await this.#worker.send(`${this.#surface.noteHeading}\n${args.message.trim()}`);
         return json({ outcome: "sent" });
       }
 
@@ -1097,6 +1289,14 @@ export class PiMetaOperatorCore {
 
         if (args.action === "question_reject") {
           if (!args.reason?.trim()) throw new Error("question_reject requires a reason");
+          await this.#ledger(cwd, {
+            event: "question_answered",
+            gate_id: pending.task.taskId,
+            attempt: pending.task.attempt,
+            request_id: pending.requestId,
+            reason: args.reason.trim(),
+            source: "operator-reject",
+          });
           await supervisor.resolveRequest({
             requestId: pending.requestId,
             resolution: {
@@ -1114,7 +1314,7 @@ export class PiMetaOperatorCore {
           return json({ outcome: "rejected" });
         }
 
-        const source = args.source ?? "human";
+        const source = args.source ?? (this.#isAuto ? "auto-operator" : "human");
         if (source === "approved-context") {
           const facts = supervisor.listFacts({ runId: pending.task.runId });
           await this.#revalidateRuleCitations(cwd, facts, args.citedFactIds ?? []);
@@ -1123,6 +1323,14 @@ export class PiMetaOperatorCore {
             citedFactIds: args.citedFactIds ?? [],
             answer: args.answer ?? "",
             scope: { runId: pending.task.runId },
+          });
+          await this.#ledger(cwd, {
+            event: "question_answered",
+            gate_id: pending.task.taskId,
+            attempt: pending.task.attempt,
+            request_id: pending.requestId,
+            answer: routine.answer,
+            source: "approved-context",
           });
           await supervisor.resolveRequest({
             requestId: pending.requestId,
@@ -1141,6 +1349,38 @@ export class PiMetaOperatorCore {
             reason: null,
           });
           return json({ outcome: "answered", source, citedFactIds: routine.citations.map((c) => c.factId) });
+        }
+
+        if (this.#isAuto) {
+          // The autopilot answers from its own doctrine and the gate contract;
+          // the ledger, not the supervisor's human-scoped source, is where the
+          // authorship and the reasoning are recorded.
+          const answer = args.answer?.trim();
+          if (!answer) throw new Error("question_reply requires a non-empty answer");
+          const rationale = args.rationale?.trim();
+          if (!rationale) {
+            throw new Error("question_reply requires a rationale for the autopilot ledger");
+          }
+          await this.#ledger(cwd, {
+            event: "question_answered",
+            gate_id: pending.task.taskId,
+            attempt: pending.task.attempt,
+            request_id: pending.requestId,
+            answer,
+            rationale,
+            source: "auto-operator",
+          });
+          await supervisor.resolveRequest({
+            requestId: pending.requestId,
+            resolution: {
+              outcome: "answered",
+              source: OPERATOR_RESOLUTION_SOURCE,
+              citedFactIds: [],
+              detail: answer,
+            },
+          });
+          this.#resolveDeferred(pending.requestId, { approved: true, answer, reason: null });
+          return json({ outcome: "answered", source: "auto-operator" });
         }
 
         // Material question: the human sees the exact question and authors
@@ -1172,6 +1412,15 @@ export class PiMetaOperatorCore {
 
         if (args.action === "permission_reject") {
           if (!args.reason?.trim()) throw new Error("permission_reject requires a reason");
+          await this.#ledger(cwd, {
+            event: "shell_approval",
+            gate_id: pending.task.taskId,
+            attempt: pending.task.attempt,
+            request_id: pending.requestId,
+            approved: false,
+            rationale: args.reason.trim(),
+            payload_sha256: sha256Text(pending.payload),
+          });
           await supervisor.resolveRequest({
             requestId: pending.requestId,
             resolution: {
@@ -1187,6 +1436,56 @@ export class PiMetaOperatorCore {
             reason: `The operator rejected this call: ${args.reason.trim()}`,
           });
           return json({ outcome: "rejected" });
+        }
+
+        if (this.#isAuto) {
+          // Same binding as the human dialog: the verdict covers exactly the
+          // persisted pending payload, whose hash is what the ledger records.
+          if (typeof args.approve !== "boolean") {
+            throw new Error("permission_reply requires an explicit approve boolean");
+          }
+          const rationale = args.rationale?.trim();
+          if (!rationale) {
+            throw new Error("permission_reply requires a rationale for the autopilot ledger");
+          }
+          const payloadSha256 = sha256Text(pending.payload);
+          await this.#ledger(cwd, {
+            event: "shell_approval",
+            gate_id: pending.task.taskId,
+            attempt: pending.task.attempt,
+            request_id: pending.requestId,
+            approved: args.approve,
+            rationale,
+            payload_sha256: payloadSha256,
+          });
+          if (!args.approve) {
+            await supervisor.resolveRequest({
+              requestId: pending.requestId,
+              resolution: {
+                outcome: "rejected",
+                source: OPERATOR_RESOLUTION_SOURCE,
+                citedFactIds: [],
+                detail: rationale,
+              },
+            });
+            this.#resolveDeferred(pending.requestId, {
+              approved: false,
+              answer: null,
+              reason: `The autopilot operator denied this call: ${rationale}`,
+            });
+            return json({ outcome: "denied", payload_sha256: payloadSha256 });
+          }
+          await supervisor.resolveRequest({
+            requestId: pending.requestId,
+            resolution: {
+              outcome: "answered",
+              source: OPERATOR_RESOLUTION_SOURCE,
+              citedFactIds: [],
+              detail: `approved once by the autopilot operator: ${rationale}`,
+            },
+          });
+          this.#resolveDeferred(pending.requestId, { approved: true, answer: null, reason: null });
+          return json({ outcome: "approved_once", payload_sha256: payloadSha256 });
         }
 
         // Approval requires the human to confirm the complete recorded
@@ -1240,6 +1539,14 @@ export class PiMetaOperatorCore {
         await this.#revokeChild();
         await recoveryStore.save(null);
         const result = await supervisor.abortWorker({ reason: args.reason.trim() });
+        // Recorded after the fact: revoking a possibly live child must never
+        // wait on the ledger, but the completed abort still has to be audited.
+        await this.#ledger(cwd, {
+          event: "worker_aborted",
+          gate_id: worker?.task.taskId ?? null,
+          attempt: worker?.task.attempt ?? null,
+          reason: args.reason.trim(),
+        });
         return json({
           outcome: "aborted",
           worker: result.worker,
@@ -1292,6 +1599,12 @@ export class PiMetaOperatorCore {
         // Disposal is best-effort once the worker is finished.
       }
       this.#worker = null;
+      await this.#ledger(cwd, {
+        event: "worker_released",
+        gate_id: worker.task.taskId,
+        attempt: worker.task.attempt,
+        reason: args.reason?.trim() || "gate work complete",
+      });
       return json({ outcome: "released", worker: released });
     });
   }
@@ -1328,6 +1641,8 @@ export class PiMetaOperatorCore {
       action: "prepare" | "commit";
       decision?: "approve" | "revise" | "block" | "not_applicable";
       reason?: string;
+      /** Auto surface: the operator's recorded justification for the commit. */
+      rationale?: string;
     }
   ): Promise<string> {
     return this.#actions.run(async () => {
@@ -1383,18 +1698,57 @@ export class PiMetaOperatorCore {
             catalog: prepared.binding.workflow,
             consequence: prepared.binding.next,
           },
-          note: "Commit shows the full exact confirmation bytes in the parent TUI; only the human's confirmation there performs the transition.",
+          note: this.#isAuto
+            ? "Commit recomputes this binding and refuses any byte difference; the autopilot's rationale is recorded in the run ledger."
+            : "Commit shows the full exact confirmation bytes in the parent TUI; only the human's confirmation there performs the transition.",
         });
       }
 
       // commit
-      this.#requireTui(ctx, "committing a gate transition");
+      if (!this.#isAuto) this.#requireTui(ctx, "committing a gate transition");
       const proposal = supervisor.getProposal();
       if (!proposal) throw new Error("no prepared transition proposal exists");
       const parsed = JSON.parse(proposal.canonical.slice(proposal.canonical.indexOf("\n") + 1)) as {
         decision: { value: "approve" | "revise" | "block" | "not_applicable"; reason: string | null };
         run: { gate_id: string; attempt: number };
       };
+      let rationale: string | null = null;
+      let runDir: string | undefined;
+      if (this.#isAuto) {
+        rationale = args.rationale?.trim() || null;
+        if (!rationale) {
+          throw new Error("commit requires a rationale for the autopilot ledger");
+        }
+        const run = await loadActiveRun(cwd);
+        if (!run) throw new Error("no active run exists for this transition");
+        runDir = run.runDir;
+        const attempts = (run.state.attempts ?? {}) as Record<string, number>;
+        const gateAttempts = attempts[parsed.run.gate_id] ?? 0;
+        if (parsed.decision.value === "revise" && gateAttempts >= REVISE_ATTEMPT_CAP) {
+          return await this.#escalate(
+            cwd,
+            {
+              kind: "revise_cap",
+              detail: `${parsed.run.gate_id} has already run ${gateAttempts} attempts (cap ${REVISE_ATTEMPT_CAP}); a further revise is refused`,
+              gate_id: parsed.run.gate_id,
+              attempts: gateAttempts,
+            },
+            runDir
+          );
+        }
+        const spent = await this.#launchBudgetExceeded(cwd);
+        if (spent !== null) {
+          return await this.#escalate(
+            cwd,
+            {
+              kind: "launch_cap",
+              detail: `the run has already launched ${spent} gate attempts (cap ${RUN_LAUNCH_CAP}); committing would start another`,
+              total_attempts: spent,
+            },
+            runDir
+          );
+        }
+      }
       let rejection: string | null = null;
       let decisionCommitted = false;
       let activeLease: TransitionLease | null = null;
@@ -1405,12 +1759,13 @@ export class PiMetaOperatorCore {
         await supervisor.endTransition({ leaseId: lease.leaseId, outcome: "cancelled" });
       };
 
+      let decided: { agentRecommendation: unknown; reviewManifestSha256: unknown } | null = null;
       let outcome: WorkflowOutcomeLike;
       try {
         outcome = (await runNextCommand({
           repoRoot: cwd,
           host: "pi",
-          sessionMode: "meta",
+          sessionMode: this.#surface.mode,
           display: async () => {},
           decide: async () => {
             try {
@@ -1436,18 +1791,25 @@ export class PiMetaOperatorCore {
                 scope,
                 recomputedCanonical: recomputed.confirmation,
               });
-              // The human confirms the FULL exact canonical bytes.
-              const confirmed = await ctx.ui.confirm(
-                `Commit ${recomputed.binding.decision.value} for ${recomputed.binding.run.gate_id} (attempt ${recomputed.binding.run.attempt})?`,
-                recomputed.confirmation
-              );
-              if (!confirmed) {
-                rejection = "the human declined the exact transition confirmation";
-                await cancelLease();
-                return null;
+              if (this.#isAuto) {
+                decided = {
+                  agentRecommendation: recomputed.binding.agent_recommendation,
+                  reviewManifestSha256: recomputed.binding.review_manifest_sha256,
+                };
+              } else {
+                // The human confirms the FULL exact canonical bytes.
+                const confirmed = await ctx.ui.confirm(
+                  `Commit ${recomputed.binding.decision.value} for ${recomputed.binding.run.gate_id} (attempt ${recomputed.binding.run.attempt})?`,
+                  recomputed.confirmation
+                );
+                if (!confirmed) {
+                  rejection = "the human declined the exact transition confirmation";
+                  await cancelLease();
+                  return null;
+                }
               }
-              // Revalidate against current bytes immediately after the human
-              // confirmation, before returning the decision to the runtime.
+              // Revalidate against current bytes immediately before returning
+              // the decision to the runtime.
               const revalidated = await buildTransitionBinding({
                 repoRoot: cwd,
                 host: "pi",
@@ -1458,7 +1820,9 @@ export class PiMetaOperatorCore {
                 reason: parsed.decision.reason,
               });
               if (revalidated.confirmation !== proposal.canonical) {
-                rejection = "the reviewed state changed while the human was confirming; no decision was committed";
+                rejection = this.#isAuto
+                  ? "the reviewed state changed after the proposal was prepared; no decision was committed"
+                  : "the reviewed state changed while the human was confirming; no decision was committed";
                 await cancelLease();
                 return null;
               }
@@ -1478,6 +1842,22 @@ export class PiMetaOperatorCore {
               activeLease = null;
               await supervisor.endTransition({ leaseId: lease.leaseId, outcome: "committed" });
             }
+            // Recorded between the committed state and the next launch: an
+            // unrecordable decision must not go on to start further work.
+            await this.#ledger(
+              cwd,
+              {
+                event: "gate_decision",
+                gate_id: parsed.run.gate_id,
+                attempt: parsed.run.attempt,
+                decision: parsed.decision.value,
+                reason: parsed.decision.reason,
+                rationale,
+                agent_recommendation: decided?.agentRecommendation ?? null,
+                review_manifest_sha256: decided?.reviewManifestSha256 ?? null,
+              },
+              runDir
+            );
           },
           launch: this.#metaLaunch(supervisor, policy, ctx, cwd, recoveryStore),
         })) as WorkflowOutcomeLike;
@@ -1487,6 +1867,22 @@ export class PiMetaOperatorCore {
 
       if (outcome.kind === "cancelled") {
         return json({ outcome: "cancelled", rejection, note: "No decision was committed and no transition occurred." });
+      }
+      if (this.#isAuto && decisionCommitted && outcome.kind === "blocked") {
+        await this.#ledger(
+          cwd,
+          {
+            event: "escalation",
+            kind: "run_blocked",
+            detail: `${parsed.run.gate_id} was blocked: ${parsed.decision.reason ?? "no reason recorded"}`,
+          },
+          runDir
+        );
+        return json({
+          ...describeOutcome(outcome),
+          decision_committed: decisionCommitted,
+          escalation_required: "run_blocked",
+        });
       }
       return json({ ...describeOutcome(outcome), decision_committed: decisionCommitted });
     });
@@ -1539,11 +1935,11 @@ export function createRealBindings(): PiHostBindings {
         },
       });
 
+      const surface = SURFACES[input.attempt.sessionMode ?? "meta"];
       const askOperator = piModule.defineTool({
         name: "ask_operator",
-        label: "Ask the meta-operator",
-        description:
-          "Ask the supervising meta-operator one focused question when blocked. Material questions are relayed to the human.",
+        label: surface.askLabel,
+        description: surface.askDescription,
         parameters: Type.Object({ question: Type.String() }),
         // The pending relay observes the session's abort signal so an aborted
         // child settles this tool call instead of blocking abort() forever.

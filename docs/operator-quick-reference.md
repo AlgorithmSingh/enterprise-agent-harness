@@ -1,8 +1,8 @@
 ---
 type: Guide
 title: Retrieval Harness Operator Quick Reference
-description: Summarizes the manual commands, human decisions, run states, result envelope, and recovery behavior for the Retrieval agent harness.
-timestamp: 2026-08-12T08:40:00-04:00
+description: Summarizes the manual commands, human decisions, run states, result envelope, recovery behavior, and the autopilot mode for the Retrieval agent harness.
+timestamp: 2026-08-12T14:30:00-04:00
 ---
 
 # Retrieval Harness Operator Quick Reference
@@ -53,4 +53,13 @@ The agent recommendation is advisory. Cancellation commits nothing. The current 
 - A stale session, mismatched launch ID, wrong host mode, changed catalog, changed reviewed file, or legacy receipt-bearing v1 run fails closed.
 - A crashed command can leave `.retrieval-agent-runs/<run-id>/.transition-lock` (or `.retrieval-agent-runs/.start-lock` for a crashed start) stale; after verifying no command is running, remove only that lock directory and rerun the command.
 - BR returns to B25; a third repair attempt is refused with "Targeted repair reached its 2-attempt repair limit", leaving the B27 result undecided so the human must then Approve or Block.
+
+## Autopilot mode
+
+In [autopilot mode](autopilot-design.md) you talk to one visible operator agent (`retrieval-autopilot` in OpenCode; `pi -e .pi/extensions/retrieval-autopilot.ts` in Pi), state the request once, and the agent runs the whole sequence: it launches gate workers, reviews results under its judgment doctrine, decides approve/revise/block, answers worker questions, and approves shell commands after inspecting the exact bytes. You watch progress in conversation and can interrupt at any time.
+
+- Every authority action is recorded with rationale in `.retrieval-agent-runs/<run-id>/autopilot/decisions.jsonl`; `last_decision.decided_by_mode` in the run state records `auto` durably.
+- You are interrupted only for critical blockers: a block decision, an exhausted bound (two revises per gate, forty launches per run), a fail-closed runtime refusal, credential exposure, or a shell request the doctrine forbids.
+- A blocked autopilot run resumes only after you tell the operator to resume, with your instruction relayed as the resume reason.
+- An auto-owned attempt refuses the manual and meta surfaces (and vice versa); use one operator surface per run.
 

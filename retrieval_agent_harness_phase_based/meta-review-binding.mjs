@@ -68,8 +68,8 @@ function assertWorkerBinding(gateWorker, run, review) {
       "the recorded gate worker session does not match the runtime-recorded attempt session"
     );
   }
-  if (review.attempt.session.mode !== "meta") {
-    throw new Error("the reviewed attempt is not owned by the meta-operator surface");
+  if (!["meta", "auto"].includes(review.attempt.session.mode)) {
+    throw new Error("the reviewed attempt is not owned by a supervised operator surface");
   }
   if (gateWorker.modelVerification !== "verified") {
     throw new Error(

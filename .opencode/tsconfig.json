@@ -16,7 +16,10 @@
     "retrieval-gate-session.ts",
     "retrieval-operator-loader.ts",
     "retrieval-operator-tools.ts",
+    "retrieval-autopilot-loader.ts",
+    "retrieval-autopilot-tools.ts",
     "adapter-contract.test.ts",
-    "meta-operator-contract.test.ts"
+    "meta-operator-contract.test.ts",
+    "autopilot-contract.test.ts"
   ]
 }

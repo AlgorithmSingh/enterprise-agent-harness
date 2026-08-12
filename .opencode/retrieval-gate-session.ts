@@ -1,9 +1,10 @@
 /**
- * Shared fresh-root gate-session adapter for OpenCode. Both the manual TUI
- * plugin (retrieval-phase-workflow.ts) and the meta-operator server plugin
- * (retrieval-operator-tools.ts) launch gate sessions through this module, so the
- * create → retire-unexpected-child → record → prompt sequence and the gate
- * permission boundary exist exactly once.
+ * Shared fresh-root gate-session adapter for OpenCode. The manual TUI plugin
+ * (retrieval-phase-workflow.ts) and both supervised operator surfaces —
+ * meta (retrieval-operator-tools.ts) and auto (retrieval-autopilot-tools.ts) —
+ * launch gate sessions through this module, so the create →
+ * retire-unexpected-child → record → prompt sequence and the gate permission
+ * boundary exist exactly once.
  */
 
 import { lstat, readdir } from "node:fs/promises";
@@ -38,7 +39,7 @@ export interface OpencodeModelRef {
   variant?: string;
 }
 
-export type GateSessionMode = "manual" | "meta";
+export type GateSessionMode = "manual" | "meta" | "auto";
 
 export interface GateSessionReference {
   id: string;
@@ -79,7 +80,16 @@ export interface GateSessionClient {
 }
 
 export const OPERATOR_AGENT = "retrieval-operator";
-export const OPERATOR_TOOL_IDS = ["retrieval_meta_run", "retrieval_meta_gate", "retrieval_meta_transition"] as const;
+export const AUTOPILOT_AGENT = "retrieval-autopilot";
+/** Every supervised operator tool id; a gate session may call none of them. */
+export const OPERATOR_TOOL_IDS = [
+  "retrieval_meta_run",
+  "retrieval_meta_gate",
+  "retrieval_meta_transition",
+  "retrieval_auto_run",
+  "retrieval_auto_gate",
+  "retrieval_auto_transition",
+] as const;
 
 const PROTECTED_EDIT_PATTERNS = [
   ".retrieval-agent-runs/**",

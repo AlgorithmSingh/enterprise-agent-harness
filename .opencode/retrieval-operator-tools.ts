@@ -6,6 +6,12 @@
  *   retrieval_meta_gate       — gate interaction (wait / read / send / replies / abort / release)
  *   retrieval_meta_transition — transition (prepare / commit)
  *
+ * The action implementations below are shared by both supervised operator
+ * surfaces and selected by `runtime.surface` (see OPERATOR_SURFACES): the meta
+ * surface keeps the human as the decision authority, and the auto surface
+ * (retrieval-autopilot-tools.ts) replaces each human checkpoint with the
+ * autopilot agent's own recorded arguments plus a run-scoped decision ledger.
+ *
  * The shared runtime (plugin-runtime.mjs) remains the only authority for run
  * mechanics, result validation, committed decision state, and transitions. Every handler
  * fails closed for wrong agent/session/role and treats gate content as
@@ -35,6 +41,7 @@ import {
   type ModelRef,
   type ModelRolePolicy,
   type ProposalScope,
+  type ResolutionSource,
   type TranscriptEntry,
   type TransitionLease,
   type WorkerRecord,
@@ -47,6 +54,7 @@ import {
   runNextCommand,
   runStartCommand,
 } from "../retrieval_agent_harness_phase_based/plugin-runtime.mjs";
+import { appendAutopilotLedger } from "../retrieval_agent_harness_phase_based/autopilot-ledger.mjs";
 import {
   buildTransitionBinding,
   permissionApprovalConfirmation,
@@ -55,6 +63,7 @@ import {
   startRunConfirmation,
 } from "../retrieval_agent_harness_phase_based/meta-review-binding.mjs";
 import {
+  AUTOPILOT_AGENT,
   errorText,
   launchGateSession,
   OPERATOR_AGENT,
@@ -63,6 +72,7 @@ import {
   retireGateSession,
   type GateLaunchPacket,
   type GateSessionClient,
+  type GateSessionMode,
   type GateSessionReference,
   type OpencodeModelRef,
 } from "./retrieval-gate-session.ts";
@@ -72,13 +82,72 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const MODEL_CONFIG_FILE = ".opencode/retrieval-operator-models.json";
-const STATE_FILE = ".opencode/.retrieval-meta/state.json";
-const RECOVERY_FILE = ".opencode/.retrieval-meta/launch-recovery.json";
 const RULE_FILES = ["AGENTS.md", "retrieval_agent_harness_phase_based/_SHARED-RETRIEVAL-ENGINEERING-RULES.md"];
-const RUN_TOOL = "retrieval_meta_run";
-const GATE_TOOL = "retrieval_meta_gate";
-const TRANSITION_TOOL = "retrieval_meta_transition";
 const WAIT_POLL_MS = 1_000;
+
+/**
+ * Unattended bounds, derived from the runtime's own attempt counters — the auto
+ * surface adds no bookkeeping of its own — and applied only to that surface.
+ * Two revises are the plan for any gate, so a third agent-taken revise is the
+ * human's call. Forty gate launches bound a whole run; that ceiling is checked
+ * where the agent chooses to spend a launch (resume, and a commit whose route
+ * opens the next gate), never on recover, which only finishes a launch the run
+ * already committed to.
+ */
+const REVISE_ATTEMPT_CAP = 3;
+const RUN_LAUNCH_CAP = 40;
+
+export type OperatorSurfaceId = "meta" | "auto";
+
+interface OperatorSurface {
+  id: OperatorSurfaceId;
+  /** The one primary agent allowed to call this surface's tools. */
+  agent: string;
+  sessionMode: GateSessionMode;
+  stateFile: string;
+  recoveryFile: string;
+  runTool: string;
+  gateTool: string;
+  transitionTool: string;
+}
+
+/**
+ * The two supervised surfaces differ only in who authorizes an action and
+ * where their supervisor state lives. Everything else — runtime authority,
+ * ownership, model policy, revocation ordering — is one implementation.
+ */
+export const OPERATOR_SURFACES: Record<OperatorSurfaceId, OperatorSurface> = {
+  meta: {
+    id: "meta",
+    agent: OPERATOR_AGENT,
+    sessionMode: "meta",
+    stateFile: ".opencode/.retrieval-meta/state.json",
+    recoveryFile: ".opencode/.retrieval-meta/launch-recovery.json",
+    runTool: "retrieval_meta_run",
+    gateTool: "retrieval_meta_gate",
+    transitionTool: "retrieval_meta_transition",
+  },
+  auto: {
+    id: "auto",
+    agent: AUTOPILOT_AGENT,
+    sessionMode: "auto",
+    stateFile: ".opencode/.retrieval-auto/state.json",
+    recoveryFile: ".opencode/.retrieval-auto/launch-recovery.json",
+    runTool: "retrieval_auto_run",
+    gateTool: "retrieval_auto_gate",
+    transitionTool: "retrieval_auto_transition",
+  },
+};
+
+/**
+ * The generic package's closed resolution vocabulary predates this surface and
+ * has no value for an operator-authored answer. Recording one as "human" would
+ * put a false authorship in the audit trail, so operator-authored resolutions
+ * take "operator-reject" — the resolution's own outcome field still separates
+ * answered from rejected — and the precise source goes to the run ledger.
+ */
+const AUTO_RESOLUTION_SOURCE: ResolutionSource = "operator-reject";
+const AUTO_LEDGER_SOURCE = "auto-operator";
 
 interface ToolContextLike {
   sessionID: string;
@@ -191,13 +260,14 @@ async function readModelPolicy(directory: string): Promise<ModelRolePolicy> {
   );
 }
 
-interface OperatorRuntime {
+export interface OperatorRuntime {
   client: OpencodeClient;
   directory: string;
   supervisor: MetaSupervisor;
   policy: ModelRolePolicy;
   actions: SerialQueue;
   recoveryStore: MetaStateStore;
+  surface: OperatorSurface;
 }
 
 async function mapTranscript(
@@ -257,11 +327,49 @@ async function rawMessages(
   return (response.data ?? []) as Array<{ info: Record<string, unknown>; parts: unknown[] }>;
 }
 
-/** Fail closed unless the caller is the named operator agent. */
-function assertOperator(context: ToolContextLike): void {
-  if (context.agent !== OPERATOR_AGENT) {
-    throw new Error(`this tool is reserved for the ${OPERATOR_AGENT} agent (caller: ${context.agent})`);
+/** Fail closed unless the caller is this surface's named operator agent. */
+function assertOperator(runtime: OperatorRuntime, context: ToolContextLike): void {
+  if (context.agent !== runtime.surface.agent) {
+    throw new Error(
+      `this tool is reserved for the ${runtime.surface.agent} agent (caller: ${context.agent})`
+    );
   }
+}
+
+/** The run directory the auto surface's ledger entries belong to. */
+async function activeRunDir(runtime: OperatorRuntime): Promise<string> {
+  const run = await loadActiveRun(runtime.directory);
+  if (!run) throw new Error("the autopilot ledger requires an active run");
+  return run.runDir as string;
+}
+
+/**
+ * Record one auto-surface authority action. The ledger is the only account of
+ * an unattended decision, so a failed append fails the action that needed it.
+ * The meta surface, whose authority is the human transcript, writes nothing.
+ */
+async function ledgerAutoAction(
+  runtime: OperatorRuntime,
+  entry: Record<string, unknown>,
+  runDir?: string
+): Promise<void> {
+  if (runtime.surface.id !== "auto") return;
+  await appendAutopilotLedger(runDir ?? (await activeRunDir(runtime)), entry);
+}
+
+function attemptTotal(attempts: Record<string, number> | undefined): number {
+  return Object.values(attempts ?? {}).reduce((total, count) => total + count, 0);
+}
+
+/** A bound the agent must resolve with the human; data, never a thrown error. */
+async function escalate(
+  runtime: OperatorRuntime,
+  kind: string,
+  detail: string,
+  runDir?: string
+): Promise<Record<string, unknown>> {
+  await ledgerAutoAction(runtime, { event: "escalation", kind, detail }, runDir);
+  return { outcome: "escalation_required", kind, detail };
 }
 
 /**
@@ -326,7 +434,7 @@ async function invalidateRecoveryRecord(runtime: OperatorRuntime): Promise<void>
   await runtime.recoveryStore.save(null);
 }
 
-function metaLaunch(runtime: OperatorRuntime) {
+function supervisedLaunch(runtime: OperatorRuntime) {
   return async (
     packet: GateLaunchPacket,
     record: (session: GateSessionReference) => Promise<void>
@@ -345,7 +453,7 @@ function metaLaunch(runtime: OperatorRuntime) {
         client: runtime.client as unknown as GateSessionClient,
         directory: runtime.directory,
         packet,
-        sessionMode: "meta",
+        sessionMode: runtime.surface.sessionMode,
         model: opencodeModel,
         recordSession: async (session) => {
           createdSessionId = session.id;
@@ -752,7 +860,7 @@ async function verifyHumanBlock(
 ): Promise<{ accepted: boolean; code: string }> {
   const transcript = await mapTranscript(runtime.client, runtime.directory, context.sessionID);
   const verdict = verifyHumanAuthorization({
-    expectedAgent: OPERATOR_AGENT,
+    expectedAgent: runtime.surface.agent,
     actualAgent: context.agent,
     sessionId: context.sessionID,
     currentMessageId: context.messageID,
@@ -789,9 +897,13 @@ export function createOperatorRuntime(input: {
   supervisor: MetaSupervisor;
   policy: ModelRolePolicy;
   recoveryStore?: MetaStateStore;
+  /** Defaults to the human-authorized meta surface. */
+  surface?: OperatorSurfaceId;
 }): OperatorRuntime {
+  const { surface, ...rest } = input;
   return {
-    ...input,
+    ...rest,
+    surface: OPERATOR_SURFACES[surface ?? "meta"],
     recoveryStore: input.recoveryStore ?? new InMemoryMetaStateStore(),
     actions: new SerialQueue(),
   };
@@ -812,19 +924,26 @@ export function bridgePluginV2Client(pluginClient: unknown): OpencodeClient {
   return new OpencodeClient({ client: transport as never });
 }
 
-async function loadOperatorRuntime(input: PluginInput): Promise<OperatorRuntime> {
+export async function loadOperatorRuntime(
+  input: PluginInput,
+  surfaceId: OperatorSurfaceId = "meta"
+): Promise<OperatorRuntime> {
+  const surface = OPERATOR_SURFACES[surfaceId];
   const directory = input.directory;
   const client = bridgePluginV2Client(input.client);
   const policy = await readModelPolicy(directory);
+  // Each surface owns its own supervisor state, so one never adopts the
+  // other's worker, request, or prepared proposal.
   const supervisor = await MetaSupervisor.load({
-    store: new FileMetaStateStore(path.join(directory, STATE_FILE)),
+    store: new FileMetaStateStore(path.join(directory, surface.stateFile)),
   });
   return createOperatorRuntime({
     client,
     directory,
     supervisor,
     policy,
-    recoveryStore: new FileMetaStateStore(path.join(directory, RECOVERY_FILE)),
+    surface: surfaceId,
+    recoveryStore: new FileMetaStateStore(path.join(directory, surface.recoveryFile)),
   });
 }
 
@@ -843,7 +962,7 @@ export async function runAction(
   }
 ): Promise<string> {
   return runtime.actions.run(async () => {
-    assertOperator(context);
+    assertOperator(runtime, context);
     await assertOperatorModel(runtime, context);
 
     if (args.action === "status") {
@@ -892,31 +1011,38 @@ export async function runAction(
       const initialIdea = args.initialIdea?.trim();
       let intake: { targetRepoPath: string; initialIdea: string } | undefined;
       if (targetRepoPath && initialIdea) {
-        // Kickoff values become approved context, so they require the human's
-        // exact-byte confirmation — a model-authored argument is not a human fact.
-        const canonical = startRunConfirmation({ targetRepoPath, initialIdea });
-        const verdict = await verifyHumanBlock(runtime, context, RUN_TOOL, canonical);
-        if (!verdict.accepted) {
-          return json({
-            outcome: "human_authorization_rejected",
-            code: verdict.code,
-            required_block: canonical,
-            note:
-              "Starting a run seeds these kickoff values as approved context. Show them to the human; the run starts only when the human's next message is exactly the required_block text.",
-          });
+        if (runtime.surface.id === "meta") {
+          // Kickoff values become approved context, so they require the human's
+          // exact-byte confirmation — a model-authored argument is not a human fact.
+          const canonical = startRunConfirmation({ targetRepoPath, initialIdea });
+          const verdict = await verifyHumanBlock(runtime, context, runtime.surface.runTool, canonical);
+          if (!verdict.accepted) {
+            return json({
+              outcome: "human_authorization_rejected",
+              code: verdict.code,
+              required_block: canonical,
+              note:
+                "Starting a run seeds these kickoff values as approved context. Show them to the human; the run starts only when the human's next message is exactly the required_block text.",
+            });
+          }
         }
         intake = { targetRepoPath, initialIdea };
       }
       const outcome = (await runStartCommand({
         repoRoot: runtime.directory,
         host: "opencode",
-        sessionMode: "meta",
+        sessionMode: runtime.surface.sessionMode,
         intake,
-        launch: metaLaunch(runtime),
+        launch: supervisedLaunch(runtime),
         resumeReason: undefined,
       })) as WorkflowOutcomeLike;
       if (outcome.kind === "launched" && intake && outcome.run) {
         await seedApprovedContext(runtime, intake, outcome.run.state.run_id);
+        await ledgerAutoAction(runtime, {
+          event: "run_started",
+          initial_idea: intake.initialIdea,
+          target_repo_path: intake.targetRepoPath,
+        });
       }
       if (outcome.kind === "no_run") {
         return json({
@@ -934,17 +1060,37 @@ export async function runAction(
     // resume
     const resumeReason = args.resumeReason?.trim();
     if (!resumeReason) {
-      throw new Error("resume requires resumeReason relayed from the human");
+      throw new Error(
+        runtime.surface.id === "auto"
+          ? "resume requires a resumeReason recording the human's instruction to continue"
+          : "resume requires resumeReason relayed from the human"
+      );
     }
     requireGateModel(runtime.policy, MODEL_CONFIG_FILE);
     const run = await loadActiveRun(runtime.directory);
-    if (run && run.state.status === "blocked") {
+    if (runtime.surface.id === "auto") {
+      // A blocked run stopped for the human; resuming it is the one run-control
+      // action the autopilot may not decide on its own evidence.
+      if (!run || run.state.status !== "blocked") {
+        throw new Error(
+          "resume applies only to a blocked run; use start to continue an active run"
+        );
+      }
+      if (attemptTotal(run.state.attempts) >= RUN_LAUNCH_CAP) {
+        return json(await escalate(
+          runtime,
+          "launch_cap",
+          `this run has already used ${attemptTotal(run.state.attempts)} gate launches, the unattended ceiling of ${RUN_LAUNCH_CAP}; resuming it needs the human's decision`,
+          run.runDir as string
+        ));
+      }
+    } else if (run && run.state.status === "blocked") {
       const canonical = resumeRunConfirmation({
         runId: run.state.run_id,
         gateId: run.state.active_gate_id ?? "unknown",
         resumeReason,
       });
-      const verdict = await verifyHumanBlock(runtime, context, RUN_TOOL, canonical);
+      const verdict = await verifyHumanBlock(runtime, context, runtime.surface.runTool, canonical);
       if (!verdict.accepted) {
         return json({
           outcome: "human_authorization_rejected",
@@ -958,11 +1104,12 @@ export async function runAction(
     const outcome = (await runStartCommand({
       repoRoot: runtime.directory,
       host: "opencode",
-      sessionMode: "meta",
+      sessionMode: runtime.surface.sessionMode,
       intake: undefined,
       resumeReason,
-      launch: metaLaunch(runtime),
+      launch: supervisedLaunch(runtime),
     })) as WorkflowOutcomeLike;
+    await ledgerAutoAction(runtime, { event: "run_resumed", resume_reason: resumeReason });
     return json(describeOutcome(outcome));
   });
 }
@@ -986,6 +1133,10 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
   const gateModel = requireGateModel(runtime.policy, MODEL_CONFIG_FILE);
   const run = await loadActiveRun(runtime.directory);
   if (!run) return { outcome: "no_run", note: "Nothing to recover; use start." };
+  // The launch cap deliberately does not apply here: recovery only finishes a
+  // launch the run already decided on, and refusing it would strand a
+  // committed decision that nothing else can complete.
+  const surfaceMode = runtime.surface.sessionMode;
 
   const attempt = run.state.current_attempt as
     | {
@@ -993,17 +1144,19 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
         number: number;
         launch_id: string;
         delivery_status?: "pending" | "delivered";
-        session?: { host?: string; id?: string; mode?: "manual" | "meta"; path?: string };
+        session?: { host?: string; id?: string; mode?: GateSessionMode; path?: string };
       }
     | null
     | undefined;
   if (attempt) {
     if (
       attempt.session?.host !== "opencode" ||
-      attempt.session.mode !== "meta" ||
+      attempt.session.mode !== surfaceMode ||
       !attempt.session.id
     ) {
-      throw new Error("the recorded attempt does not belong to an OpenCode meta-operated session");
+      throw new Error(
+        `the recorded attempt does not belong to an OpenCode ${surfaceMode}-operated session`
+      );
     }
     const sessionID = attempt.session.id;
 
@@ -1011,19 +1164,19 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
       const outcome = (await runStartCommand({
         repoRoot: runtime.directory,
         host: "opencode",
-        sessionMode: "meta",
+        sessionMode: surfaceMode,
         intake: undefined,
-        resumeReason: "Recovered after permanently retiring an undelivered OpenCode meta kickoff.",
+        resumeReason: `Recovered after permanently retiring an undelivered OpenCode ${surfaceMode} kickoff.`,
         recoverPendingLaunch: true,
         expectedPendingLaunch: attempt,
         retirePendingSession: async (session: {
           host?: string;
           id?: string;
-          mode?: "manual" | "meta";
+          mode?: GateSessionMode;
         }) => {
           if (
             session.host !== "opencode" ||
-            session.mode !== "meta" ||
+            session.mode !== surfaceMode ||
             session.id !== sessionID
           ) {
             throw new Error("the pending kickoff session changed before retirement");
@@ -1035,7 +1188,7 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
           );
           await invalidateRecoveryRecord(runtime);
         },
-        launch: metaLaunch(runtime),
+        launch: supervisedLaunch(runtime),
       })) as WorkflowOutcomeLike;
       return {
         outcome: "recovered",
@@ -1141,10 +1294,10 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
   let outcome = (await runStartCommand({
     repoRoot: runtime.directory,
     host: "opencode",
-    sessionMode: "meta",
+    sessionMode: surfaceMode,
     intake: undefined,
     resumeReason: undefined,
-    launch: metaLaunch(runtime),
+    launch: supervisedLaunch(runtime),
   })) as WorkflowOutcomeLike;
   if (outcome.kind !== "idle") {
     return { outcome: "recovered", ...describeOutcome(outcome) };
@@ -1152,16 +1305,16 @@ async function recoverAction(runtime: OperatorRuntime): Promise<Record<string, u
   outcome = (await runNextCommand({
     repoRoot: runtime.directory,
     host: "opencode",
-    sessionMode: "meta",
+    sessionMode: surfaceMode,
     display: async () => {},
     decide: async () => null,
     afterDecision: async () => {},
-    launch: metaLaunch(runtime),
+    launch: supervisedLaunch(runtime),
   })) as WorkflowOutcomeLike;
   if (outcome.kind === "cancelled") {
     return {
       outcome: "decision_required",
-      note: "The active gate has a ready result; recovery does not decide gates. Use retrieval_meta_transition.",
+      note: `The active gate has a ready result; recovery does not decide gates. Use ${runtime.surface.transitionTool}.`,
     };
   }
   return { outcome: "recovered", ...describeOutcome(outcome) };
@@ -1189,11 +1342,16 @@ export async function gateAction(
     reason?: string;
     afterMessageId?: string;
     timeoutSeconds?: number;
+    /** Auto surface: the operator's own decision on a shell request. */
+    approve?: boolean;
+    /** Auto surface: why the operator answered or approved as it did. */
+    rationale?: string;
   }
 ): Promise<string> {
   return runtime.actions.run(async () => {
-    assertOperator(context);
+    assertOperator(runtime, context);
     await assertOperatorModel(runtime, context);
+    const auto = runtime.surface.id === "auto";
     const worker = runtime.supervisor.getWorker();
 
     if (args.action === "wait") {
@@ -1307,7 +1465,11 @@ export async function gateAction(
         parts: [
           {
             type: "text",
-            text: `Meta-operator note (advisory; not a human gate decision):\n${args.message.trim()}`,
+            text: `${
+              auto
+                ? "Autopilot-operator note (advisory; not a gate decision)"
+                : "Meta-operator note (advisory; not a human gate decision)"
+            }:\n${args.message.trim()}`,
           },
         ],
       });
@@ -1358,6 +1520,14 @@ export async function gateAction(
             detail: args.reason.trim(),
           },
         });
+        await ledgerAutoAction(runtime, {
+          event: "question_answered",
+          gate_id: pending.task.taskId,
+          attempt: pending.task.attempt,
+          request_id: pending.requestId,
+          reason: args.reason.trim(),
+          source: "operator-reject",
+        });
         return json({ outcome: "rejected" });
       }
 
@@ -1366,7 +1536,18 @@ export async function gateAction(
       if (!Array.isArray(answers) || !answers.every((a) => Array.isArray(a) && a.every((s) => typeof s === "string"))) {
         throw new Error("answersJson must be a JSON string[][]");
       }
-      const source = args.source ?? "human";
+      if (auto && args.source === "human") {
+        throw new Error(
+          "the auto surface answers as the operator; cite approved-context for a routine fact or escalate the question"
+        );
+      }
+      const rationale = args.rationale?.trim() ?? "";
+      if (auto && !rationale) {
+        throw new Error("question_reply requires a rationale recording why this answer follows");
+      }
+      const source = args.source ?? (auto ? AUTO_LEDGER_SOURCE : "human");
+      const resolutionSource: ResolutionSource =
+        source === "approved-context" ? "approved-context" : auto ? AUTO_RESOLUTION_SOURCE : "human";
       let citedFactIds: string[] = [];
       if (source === "approved-context") {
         const facts = runtime.supervisor.listFacts({ runId: pending.task.runId });
@@ -1378,7 +1559,7 @@ export async function gateAction(
           scope: { runId: pending.task.runId },
         });
         citedFactIds = routine.citations.map((citation) => citation.factId);
-      } else {
+      } else if (!auto) {
         const canonical = questionAnswerConfirmation({
           requestId: pending.requestId,
           hostRequestId: pending.hostRequestId,
@@ -1387,7 +1568,7 @@ export async function gateAction(
           attempt: pending.task.attempt,
           answers,
         });
-        const verdict = await verifyHumanBlock(runtime, context, GATE_TOOL, canonical);
+        const verdict = await verifyHumanBlock(runtime, context, runtime.surface.gateTool, canonical);
         if (!verdict.accepted) {
           return json({
             outcome: "human_authorization_rejected",
@@ -1417,10 +1598,20 @@ export async function gateAction(
         hostRequestId: pending.hostRequestId,
         resolution: {
           outcome: "answered",
-          source,
+          source: resolutionSource,
           citedFactIds,
           detail: JSON.stringify(answers),
         },
+      });
+      await ledgerAutoAction(runtime, {
+        event: "question_answered",
+        gate_id: pending.task.taskId,
+        attempt: pending.task.attempt,
+        request_id: pending.requestId,
+        answer: JSON.stringify(answers),
+        source,
+        rationale,
+        cited_fact_ids: citedFactIds,
       });
       return json({ outcome: "answered", source, citedFactIds });
     }
@@ -1440,8 +1631,30 @@ export async function gateAction(
         throw new Error("the exact recorded host permission is no longer pending for the recorded worker session");
       }
 
-      if (args.action === "permission_reject") {
+      // In the auto surface the operator itself decides, so a denial travels as
+      // its rationale: the worker is told why and how it may proceed instead.
+      let denialReason: string | null = null;
+      let rationale = "";
+      if (auto) {
+        if (args.action === "permission_reject") {
+          throw new Error("the auto surface denies a shell request through permission_reply with approve:false");
+        }
+        if (typeof args.approve !== "boolean") {
+          throw new Error("permission_reply requires approve (true or false) in the auto surface");
+        }
+        rationale = args.rationale?.trim() ?? "";
+        if (!rationale) {
+          throw new Error(
+            "permission_reply requires a rationale recording the exact command bytes you inspected and why the decision is safe"
+          );
+        }
+        if (!args.approve) denialReason = rationale;
+      } else if (args.action === "permission_reject") {
         if (!args.reason?.trim()) throw new Error("permission_reject requires a reason");
+        denialReason = args.reason.trim();
+      }
+
+      if (denialReason !== null) {
         await requireCurrentHostRequestPayload(
           runtime,
           "permission",
@@ -1453,7 +1666,7 @@ export async function gateAction(
           requestID: pending.hostRequestId,
           directory: runtime.directory,
           reply: "reject",
-          message: args.reason.trim(),
+          message: denialReason,
         });
         if (response.error !== undefined && response.error !== null) {
           throw new Error(`OpenCode permission.reply failed: ${errorText(response.error)}`);
@@ -1465,8 +1678,17 @@ export async function gateAction(
             outcome: "rejected",
             source: "operator-reject",
             citedFactIds: [],
-            detail: args.reason.trim(),
+            detail: denialReason,
           },
+        });
+        await ledgerAutoAction(runtime, {
+          event: "shell_approval",
+          gate_id: pending.task.taskId,
+          attempt: pending.task.attempt,
+          request_id: pending.requestId,
+          approved: false,
+          rationale: denialReason,
+          payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
         });
         return json({ outcome: "rejected" });
       }
@@ -1476,14 +1698,16 @@ export async function gateAction(
       if (!canonical) {
         throw new Error("the pending permission has no persisted authorization block; reject it and let the gate re-ask");
       }
-      const verdict = await verifyHumanBlock(runtime, context, GATE_TOOL, canonical);
-      if (!verdict.accepted) {
-        return json({
-          outcome: "human_authorization_rejected",
-          code: verdict.code,
-          required_block: canonical,
-          note: "Approval is granted once, only when the human sends exactly the required_block text.",
-        });
+      if (!auto) {
+        const verdict = await verifyHumanBlock(runtime, context, runtime.surface.gateTool, canonical);
+        if (!verdict.accepted) {
+          return json({
+            outcome: "human_authorization_rejected",
+            code: verdict.code,
+            required_block: canonical,
+            note: "Approval is granted once, only when the human sends exactly the required_block text.",
+          });
+        }
       }
       await requireCurrentHostRequestPayload(
         runtime,
@@ -1503,7 +1727,21 @@ export async function gateAction(
       await runtime.supervisor.resolveRequest({
         requestId: pending.requestId,
         hostRequestId: pending.hostRequestId,
-        resolution: { outcome: "answered", source: "human", citedFactIds: [], detail: "approved once" },
+        resolution: {
+          outcome: "answered",
+          source: auto ? AUTO_RESOLUTION_SOURCE : "human",
+          citedFactIds: [],
+          detail: "approved once",
+        },
+      });
+      await ledgerAutoAction(runtime, {
+        event: "shell_approval",
+        gate_id: pending.task.taskId,
+        attempt: pending.task.attempt,
+        request_id: pending.requestId,
+        approved: true,
+        rationale,
+        payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
       });
       return json({ outcome: "approved_once" });
     }
@@ -1522,6 +1760,12 @@ export async function gateAction(
         await invalidateRecoveryRecord(runtime);
       }
       const result = await runtime.supervisor.abortWorker({ reason: args.reason.trim() });
+      await ledgerAutoAction(runtime, {
+        event: "worker_aborted",
+        gate_id: result.worker?.task.taskId ?? null,
+        attempt: result.worker?.task.attempt ?? null,
+        reason: args.reason.trim(),
+      });
       return json({
         outcome: "aborted",
         worker: result.worker,
@@ -1577,10 +1821,17 @@ export async function gateAction(
       worker.hostSessionId,
     );
     await invalidateRecoveryRecord(runtime);
+    const releaseReason = args.reason?.trim() || "gate work complete";
     const released = await runtime.supervisor.releaseWorker({
       workerId: worker.workerId,
-      reason: args.reason?.trim() || "gate work complete",
+      reason: releaseReason,
       hostConfirmedIdle: true,
+    });
+    await ledgerAutoAction(runtime, {
+      event: "worker_released",
+      gate_id: released.task.taskId,
+      attempt: released.task.attempt,
+      reason: releaseReason,
     });
     return json({ outcome: "released", worker: released });
   });
@@ -1603,11 +1854,14 @@ export async function transitionAction(
     action: "prepare" | "commit";
     decision?: "approve" | "revise" | "block" | "not_applicable";
     reason?: string;
+    /** Auto surface: the recorded reasoning behind the committed decision. */
+    rationale?: string;
   }
 ): Promise<string> {
   return runtime.actions.run(async () => {
-    assertOperator(context);
+    assertOperator(runtime, context);
     await assertOperatorModel(runtime, context);
+    const auto = runtime.surface.id === "auto";
 
     if (args.action === "prepare") {
       if (!args.decision) throw new Error("prepare requires a decision");
@@ -1650,19 +1904,88 @@ export async function transitionAction(
           consequence: prepared.binding.next,
         },
         confirmation_block: prepared.confirmation,
-        note: "Show the display fields to the human. The commit succeeds only if the human's next message is exactly the confirmation_block text.",
+        note: auto
+          ? "Inspect the display fields, then commit with the rationale that records how you reached this decision. The commit is refused if any reviewed byte changed since prepare."
+          : "Show the display fields to the human. The commit succeeds only if the human's next message is exactly the confirmation_block text.",
       });
     }
 
     // commit
     const proposal = runtime.supervisor.getProposal();
     if (!proposal) throw new Error("no prepared transition proposal exists");
-    if (!proposal.preparedByMessageId) throw new Error("the prepared proposal has no anchor message");
+    if (!auto && !proposal.preparedByMessageId) {
+      throw new Error("the prepared proposal has no anchor message");
+    }
     const parsed = JSON.parse(proposal.canonical.slice(proposal.canonical.indexOf("\n") + 1)) as {
       decision: { value: "approve" | "revise" | "block" | "not_applicable"; reason: string | null };
+      run: { run_id: string; gate_id: string; attempt: number };
+      agent_recommendation: string;
+      review_manifest_sha256: string;
+      next: { status: string; gate_id: string | null };
     };
+    const rationale = args.rationale?.trim() ?? "";
+    // Empty in the meta surface, which writes no ledger; the autopilot ledger
+    // refuses an empty run directory, so a missed assignment fails loudly.
+    let runDir = "";
+    if (auto) {
+      if (!rationale) {
+        throw new Error("commit requires a rationale recording how this decision was reached");
+      }
+      const run = await loadActiveRun(runtime.directory);
+      if (!run) throw new Error("no active run exists");
+      runDir = run.runDir as string;
+      const gateAttempts = (run.state.attempts as Record<string, number> | undefined)?.[
+        parsed.run.gate_id
+      ] ?? 0;
+      if (parsed.decision.value === "revise" && gateAttempts >= REVISE_ATTEMPT_CAP) {
+        return json(await escalate(
+          runtime,
+          "revise_cap",
+          `${parsed.run.gate_id} has already used ${gateAttempts} attempts; a further unattended revise is refused — block with a reason or bring it to the human`,
+          runDir
+        ));
+      }
+      // Only a route that launches another gate spends the run's launch budget.
+      if (parsed.next.status === "active" && parsed.next.gate_id) {
+        const used = attemptTotal(run.state.attempts);
+        if (used >= RUN_LAUNCH_CAP) {
+          return json(await escalate(
+            runtime,
+            "launch_cap",
+            `this run has already used ${used} gate launches, the unattended ceiling of ${RUN_LAUNCH_CAP}; committing this decision would launch ${parsed.next.gate_id}`,
+            runDir
+          ));
+        }
+      }
+    }
     let rejection: string | null = null;
     let decisionCommitted = false;
+    let decisionLedgered = false;
+    // A blocked run stops autonomous progress: the same marker reaches the
+    // ledger and the tool's own answer so the doctrine cannot miss it.
+    const blockDetail = `${parsed.run.gate_id} was blocked: ${parsed.decision.reason ?? ""}`;
+    /** A decision that reached state is ledgered even if its next launch fails. */
+    const recordCommittedDecision = async () => {
+      if (!auto || !decisionCommitted || decisionLedgered) return;
+      decisionLedgered = true;
+      await appendAutopilotLedger(runDir, {
+        event: "gate_decision",
+        gate_id: parsed.run.gate_id,
+        attempt: parsed.run.attempt,
+        decision: parsed.decision.value,
+        reason: parsed.decision.reason,
+        rationale,
+        agent_recommendation: parsed.agent_recommendation,
+        review_manifest_sha256: parsed.review_manifest_sha256,
+      });
+      if (parsed.decision.value === "block") {
+        await appendAutopilotLedger(runDir, {
+          event: "escalation",
+          kind: "run_blocked",
+          detail: blockDetail,
+        });
+      }
+    };
     let activeLease: TransitionLease | null = null;
     const cancelLease = async () => {
       if (!activeLease) return;
@@ -1676,7 +1999,7 @@ export async function transitionAction(
       outcome = (await runNextCommand({
         repoRoot: runtime.directory,
         host: "opencode",
-        sessionMode: "meta",
+        sessionMode: runtime.surface.sessionMode,
         display: async () => {},
         decide: async () => {
           try {
@@ -1702,21 +2025,29 @@ export async function transitionAction(
               scope,
               recomputedCanonical: recomputed.confirmation,
             });
-            const transcript = await mapTranscript(runtime.client, runtime.directory, context.sessionID);
-            const verdict = verifyHumanAuthorization({
-              expectedAgent: OPERATOR_AGENT,
-              actualAgent: context.agent,
-              sessionId: context.sessionID,
-              currentMessageId: context.messageID,
-              anchor: { messageId: proposal.preparedByMessageId ?? "", toolId: TRANSITION_TOOL },
-              currentToolId: TRANSITION_TOOL,
-              expectedCanonical: proposal.canonical,
-              messages: transcript,
-            });
-            if (!verdict.accepted) {
-              rejection = `human confirmation rejected: ${verdict.code}`;
-              await cancelLease();
-              return null;
+            // The lease above already required the recomputed binding to match
+            // the prepared proposal byte for byte; the meta surface adds the
+            // human's anchored confirmation on top of that staleness check.
+            if (!auto) {
+              const transcript = await mapTranscript(runtime.client, runtime.directory, context.sessionID);
+              const verdict = verifyHumanAuthorization({
+                expectedAgent: runtime.surface.agent,
+                actualAgent: context.agent,
+                sessionId: context.sessionID,
+                currentMessageId: context.messageID,
+                anchor: {
+                  messageId: proposal.preparedByMessageId ?? "",
+                  toolId: runtime.surface.transitionTool,
+                },
+                currentToolId: runtime.surface.transitionTool,
+                expectedCanonical: proposal.canonical,
+                messages: transcript,
+              });
+              if (!verdict.accepted) {
+                rejection = `human confirmation rejected: ${verdict.code}`;
+                await cancelLease();
+                return null;
+              }
             }
             return parsed.decision.value === "approve"
               ? { decision: "approve" }
@@ -1753,14 +2084,24 @@ export async function transitionAction(
             await runtime.supervisor.endTransition({ leaseId: lease.leaseId, outcome: "committed" });
           }
         },
-        launch: metaLaunch(runtime),
+        launch: supervisedLaunch(runtime),
       })) as WorkflowOutcomeLike;
     } catch (error) {
       // Catalog/result revalidation and host quiescence all happen before the
       // runtime commits the decision. Treat any such failure as a cancelled
       // proposal, while preserving a failure after an actual commit so
       // recovery can resume the already-selected route honestly.
-      if (decisionCommitted) throw error;
+      if (decisionCommitted) {
+        try {
+          await recordCommittedDecision();
+        } catch (ledgerError) {
+          throw new Error(
+            `${errorText(error)} (the decision committed, but its autopilot ledger entry could not be written: ${errorText(ledgerError)})`,
+            { cause: error }
+          );
+        }
+        throw error;
+      }
       rejection ??= errorText(error);
       outcome = { kind: "cancelled" };
     } finally {
@@ -1774,9 +2115,22 @@ export async function transitionAction(
         note: "No decision was committed and no transition occurred.",
       });
     }
+    try {
+      await recordCommittedDecision();
+    } catch (error) {
+      // The transition is already durable; say so rather than let the failed
+      // audit read as a failed decision.
+      throw new Error(
+        `the ${parsed.decision.value} decision for ${parsed.run.gate_id} committed, but its autopilot ledger entry could not be written: ${errorText(error)}`,
+        { cause: error }
+      );
+    }
     return json({
       ...describeOutcome(outcome),
       decision_committed: decisionCommitted,
+      ...(auto && decisionCommitted && parsed.decision.value === "block"
+        ? { escalation: { kind: "run_blocked", detail: blockDetail } }
+        : {}),
     });
   });
 }
@@ -1788,13 +2142,13 @@ export async function transitionAction(
 const server: Plugin = async (input) => {
   let runtimePromise: Promise<OperatorRuntime> | null = null;
   const runtimeFor = (): Promise<OperatorRuntime> => {
-    runtimePromise ??= loadOperatorRuntime(input);
+    runtimePromise ??= loadOperatorRuntime(input, "meta");
     return runtimePromise;
   };
 
   return {
     tool: {
-      [RUN_TOOL]: tool({
+      [OPERATOR_SURFACES.meta.runTool]: tool({
         description:
           "Retrieval meta-operator run control: status of the run/worker/usage, start a run (kickoff values need the human's exact confirmation block), resume a blocked run (human-confirmed reason), or recover an interrupted launch. Reserved for the retrieval-operator agent.",
         args: {
@@ -1807,7 +2161,7 @@ const server: Plugin = async (input) => {
           return runAction(await runtimeFor(), context, args);
         },
       }),
-      [GATE_TOOL]: tool({
+      [OPERATOR_SURFACES.meta.gateTool]: tool({
         description:
           "Retrieval meta-operator gate interaction: wait/read the configured background harness/gate model, send labeled advisory follow-ups, reply/reject correlated questions and permissions (approvals need the human's exact confirmation text), abort, or release an idle finished worker. Reserved for the retrieval-operator agent.",
         args: {
@@ -1835,7 +2189,7 @@ const server: Plugin = async (input) => {
           return gateAction(await runtimeFor(), context, args);
         },
       }),
-      [TRANSITION_TOOL]: tool({
+      [OPERATOR_SURFACES.meta.transitionTool]: tool({
         description:
           "Retrieval meta-operator transition: prepare the exact decision proposal (full review binding over the verified recorded worker) or commit it after the human sends the exact confirmation block. Commit atomically records the human-selected transition state and launches the next gate through the runtime. Reserved for the retrieval-operator agent.",
         args: {

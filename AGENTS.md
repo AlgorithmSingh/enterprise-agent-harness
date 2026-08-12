@@ -5,7 +5,7 @@
 - Before beginning repository work, read `docs/repository-wide-agent-rules.md` when it is present. Root `AGENTS.md` remains the active instruction authority; the policy document explains the approved repository-wide rules without becoming a second machine registry.
 - Treat semantic design documents as living collaborative work. A focused agent may revise relevant earlier or future semantic artifacts and canonical gate prompts when needed for its current responsibility, provided it preserves approved behavior, reports every change, leaves a Git-visible diff for canonical prompts and durable documentation (run-scoped `.sequence/` artifacts are reviewed through the gate result's declared files), and maintains applicable `docs/index.md` files and `docs/log.md`.
 - A prompt edit affects only newly launched sessions. A future artifact remains draft material until its own final human gate decision.
-- The protected run-scoped Phase 2 manifest, not a working-tree proposal, controls exact implementation authority for the current session. Agents never select workflow transitions for the human.
+- The protected run-scoped Phase 2 manifest, not a working-tree proposal, controls exact implementation authority for the current session. Gate agents never select workflow transitions; transitions belong to the human in manual and meta modes, and to the autopilot operator surface alone in the explicitly opted-in autopilot mode.
 
 ## Durable documentation
 

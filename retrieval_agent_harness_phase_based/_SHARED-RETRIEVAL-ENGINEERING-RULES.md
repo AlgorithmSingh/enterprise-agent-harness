@@ -62,4 +62,4 @@ The gate result is a recommendation, not a decision. The kickoff packet supplies
 }
 ```
 
-Allowed recommendations are `approve`, `revise`, `block`, and `not_applicable`; the catalog separately controls which transitions the human may select for this gate. Include every file you create or modify in `artifacts`. Evidence may cite the same file when its contents support a claim. The human decides every transition. Never edit workflow control state or advance the run; end with a concise handoff telling the human to run `/retrieval-phase-next`.
+Allowed recommendations are `approve`, `revise`, `block`, and `not_applicable`; the catalog separately controls which transitions may be selected for this gate. Include every file you create or modify in `artifacts`. Evidence may cite the same file when its contents support a claim. Every transition is decided by your reviewing operator — the human in manual and meta modes, the autopilot operator agent in the opted-in autopilot mode — and never by you. Never edit workflow control state or advance the run; end with a concise handoff telling the human to run `/retrieval-phase-next`.

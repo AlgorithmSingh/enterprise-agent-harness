@@ -1,3 +1,4 @@
 node_modules/
 .retrieval-meta/
+.retrieval-auto/
 retrieval-operator-models.json

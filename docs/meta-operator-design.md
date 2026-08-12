@@ -2,12 +2,12 @@
 type: Architecture
 title: Retrieval Harness Meta-Operator Design
 description: Defines the optional visible operator, cheaper background gate worker, generic supervisor reuse, exact human authorization, and host-specific integration boundary.
-timestamp: 2026-08-12T08:40:00-04:00
+timestamp: 2026-08-12T14:30:00-04:00
 ---
 
 # Retrieval Harness Meta-Operator Design
 
-The optional meta-operator keeps the human in one visible operator session while a separately configured background model runs each focused gate. It has three layers:
+The optional meta-operator keeps the human in one visible operator session while a separately configured background model runs each focused gate. The same integration also carries the [autopilot mode](autopilot-design.md), an authority variant in which the operator agent takes the decisions this document assigns to the human. It has three layers:
 
 ```text
 OpenCode or Pi adapter

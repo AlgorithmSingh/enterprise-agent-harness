@@ -18,6 +18,10 @@ import {
   runNextCommand,
   runStartCommand
 } from "../retrieval_agent_harness_phase_based/plugin-runtime.mjs";
+import {
+  appendAutopilotLedger,
+  readAutopilotLedger
+} from "../retrieval_agent_harness_phase_based/autopilot-ledger.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -232,6 +236,110 @@ test("the real catalog completes living design, selected build, behavioral tests
   assert.equal("latest_receipts" in run.state, false);
   await noReceiptDirectory(run.runDir);
   assert.deepEqual(launches, expected);
+});
+
+test("the real catalog completes the same route under autopilot ownership with a full decision ledger", async (t) => {
+  const root = await projectCopy(t);
+  const launches = [];
+  let packet;
+  const launch = async (candidate) => {
+    packet = candidate;
+    launches.push(candidate.gate.id);
+    return { id: `auto-${candidate.gate.id}-${candidate.attempt}`, mode: "auto" };
+  };
+
+  await runStartCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "auto",
+    intake: {
+      targetRepoPath: root,
+      initialIdea: "Answer release-audit questions by planning a rate-limit-aware retrieval pipeline over GitHub, Jira, Confluence, and Datadog."
+    },
+    launch
+  });
+  let ledgerRunDir = (await loadActiveRun(root)).runDir;
+  await appendAutopilotLedger(ledgerRunDir, {
+    event: "run_started",
+    initial_idea: "Answer release-audit questions by planning a rate-limit-aware retrieval pipeline over GitHub, Jira, Confluence, and Datadog.",
+    target_repo_path: root
+  });
+
+  const expected = [
+    "D01", "D02", "D03", "D05", "D06", "D07", "D09", "D10", "D12",
+    "B19", "B24", "B25", "B26", "B27", "BR", "B25", "B26", "B27"
+  ];
+  let revisedValidation = false;
+
+  for (const [index, gateId] of expected.entries()) {
+    assert.equal(packet.gate.id, gateId);
+    assert.match(packet.message, /supervising autopilot operator reviews this result and advances the run/);
+    assert.doesNotMatch(packet.message, /human reviews and advances/i);
+    const run = await loadActiveRun(root);
+    assert.equal(run.state.current_attempt.session.mode, "auto");
+
+    const extraArtifacts = [];
+    if (gateId === "B19") {
+      extraArtifacts.push({
+        path: "src/agent.py",
+        role: "Simulated Retrieval agent implementation",
+        contents: "def answer() -> str:\n    return \"grounded\"\n"
+      });
+    } else if (gateId === "B24") {
+      extraArtifacts.push({
+        path: "tests/test_behavior.py",
+        role: "Scenario-driven behavioral test",
+        contents: "def test_grounded_answer() -> None:\n    assert True\n"
+      });
+    } else if (gateId === "BR") {
+      extraArtifacts.push({
+        path: "src/agent.py",
+        role: "Validator-directed repair",
+        contents: "def answer() -> str:\n    return \"grounded and repaired\"\n"
+      });
+    }
+    await writeReadyResult(root, packet, { extraArtifacts });
+
+    const decision = gateId === "B27" && !revisedValidation ? "revise" : "approve";
+    if (decision === "revise") revisedValidation = true;
+    const outcome = await runNextCommand({
+      repoRoot: root,
+      host: "pi",
+      sessionMode: "auto",
+      display: async (review) => assert.equal(review.gate.id, gateId),
+      decide: async () => ({
+        decision,
+        ...(decision === "revise"
+          ? { reason: "Repair the simulated validation finding." }
+          : {})
+      }),
+      launch
+    });
+    await appendAutopilotLedger(ledgerRunDir, {
+      event: "gate_decision",
+      gate_id: gateId,
+      attempt: packet.attempt,
+      decision,
+      rationale: `Simulated autopilot decision loop for ${gateId}.`
+    });
+    if (index === expected.length - 1) assert.equal(outcome.kind, "complete");
+  }
+
+  const run = await loadActiveRun(root);
+  assert.equal(run.state.status, "complete");
+  assert.equal(run.state.last_decision.decided_by_mode, "auto");
+  assert.deepEqual(launches, expected);
+
+  const ledger = await readAutopilotLedger(ledgerRunDir);
+  assert.equal(ledger.length, expected.length + 1);
+  assert.equal(ledger[0].event, "run_started");
+  for (const entry of ledger) {
+    assert.match(entry.recorded_at, /^\d{4}-\d{2}-\d{2}T/);
+  }
+  assert.deepEqual(
+    ledger.slice(1).map((entry) => entry.gate_id),
+    expected
+  );
 });
 
 test("working-tree manifest edits cannot widen later routing or BR authority", async (t) => {

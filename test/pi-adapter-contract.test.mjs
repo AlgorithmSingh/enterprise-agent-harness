@@ -126,7 +126,7 @@ test("Pi fails closed when an active gate loses its persisted launch role", asyn
   assert.match(guarded.reason, /missing its persisted launch role/);
 });
 
-test("Pi project discovery loads the manual adapter and excludes only the optional meta adapter", async (t) => {
+test("Pi project discovery loads the manual adapter and excludes the optional meta and autopilot adapters", async (t) => {
   const agentDir = await mkdtemp(path.join(os.tmpdir(), "retrieval-pi-agent-dir-"));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const loader = new DefaultResourceLoader({

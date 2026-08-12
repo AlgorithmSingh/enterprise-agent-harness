@@ -12,6 +12,7 @@ It is a domain sibling of the ADK and LangGraph agent harnesses: the same human-
 | [`docs/workflow-and-gate-sequence.md`](docs/workflow-and-gate-sequence.md) | The 23-gate workflow: design (D01–D12), manifest-selected implementation (B14–B22), assurance (B24–B27), bounded repair (BR). |
 | [`docs/book/index.md`](docs/book/index.md) | The verified tool book — binding external-contract authority for GitHub rate limits, gh CLI, Rovo MCP, Jira/Confluence REST, Datadog, deterministic MCP clients, and adaptive rate-limit scheduling. Every constant fact-checked against primary sources, then corrected further by prototype evidence. |
 | [`docs/operator-quick-reference.md`](docs/operator-quick-reference.md) | Day-to-day operation: `/retrieval-phase` to start, `/retrieval-phase-next` to review and advance. |
+| [`docs/autopilot-design.md`](docs/autopilot-design.md) | Autopilot mode: one visible operator agent runs the whole sequence autonomously under a binding judgment doctrine, ledgers every decision, and interrupts you only for critical blockers. |
 | [`docs/project-local-installation.md`](docs/project-local-installation.md) | Installation and the optional meta-operator mode. |
 | [`retrieval_agent_harness_phase_based/`](retrieval_agent_harness_phase_based/) | The gate catalog (`workflow.json`), canonical gate prompts, shared engineering rules, and the shared runtime. |
 | [`.prototype/`](.prototype/README.md) | Design-spike evidence: the rate-limit scheduler contract proof and the MCP headless-client contract check, whose findings corrected the book before implementation. |
@@ -19,7 +20,7 @@ It is a domain sibling of the ADK and LangGraph agent harnesses: the same human-
 
 ## Quick start
 
-Open OpenCode or Pi at this repository root (or a repository this bundle has been merged into) and run `/retrieval-phase`, then `/retrieval-phase-next` after each gate completes. Manual mode needs no npm install. Deterministic verification:
+Open OpenCode or Pi at this repository root (or a repository this bundle has been merged into) and run `/retrieval-phase`, then `/retrieval-phase-next` after each gate completes. Manual mode needs no npm install. For the fully autonomous experience, select the `retrieval-autopilot` agent (OpenCode) or `pi -e .pi/extensions/retrieval-autopilot.ts` (Pi), state the request once, and review the run's decision ledger afterwards. Deterministic verification:
 
 ```sh
 node --test test/*.test.mjs   # self-contained; needs only Node >= 22.6
