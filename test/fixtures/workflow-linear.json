@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "workflow_id": "retrieval-agent-test-linear",
+  "commands": {
+    "start": "retrieval-phase",
+    "next": "retrieval-phase-next"
+  },
+  "shared_prompt": "retrieval_agent_harness_phase_based/shared.md",
+  "phase_2_manifest": ".sequence/phase-2-manifest.json",
+  "repair": {
+    "gate_id": "BR",
+    "max_attempts": 2,
+    "return_to": "D02"
+  },
+  "gates": [
+    {
+      "id": "D01",
+      "title": "Repository intake and inventory",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/D01.md",
+      "required": true,
+      "collaborative_edits": true,
+      "required_artifacts": [
+        ".sequence/design/01-intake.json"
+      ]
+    },
+    {
+      "id": "D02",
+      "title": "Outcome and acceptance contract",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/D02.md",
+      "required": true,
+      "collaborative_edits": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/02-outcome.json"
+      ]
+    },
+    {
+      "id": "BR",
+      "title": "Bounded implementation repair",
+      "phase": "repair",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/BR.md",
+      "required": false,
+      "required_artifacts": [],
+      "decision_routes": {
+        "approve": "D02"
+      },
+      "max_attempts": 2
+    }
+  ]
+}

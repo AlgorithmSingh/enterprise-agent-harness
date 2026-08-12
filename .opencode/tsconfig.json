@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "retrieval-phase-workflow.ts",
+    "retrieval-gate-session.ts",
+    "retrieval-operator-loader.ts",
+    "retrieval-operator-tools.ts",
+    "adapter-contract.test.ts",
+    "meta-operator-contract.test.ts"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "gates": {
+    "B24": {
+      "active": true,
+      "reason": "The approved scenario needs one behavioral test.",
+      "allowed_files": [
+        "tests/test_behavior.py"
+      ]
+    }
+  }
+}

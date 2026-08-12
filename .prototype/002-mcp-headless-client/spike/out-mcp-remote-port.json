@@ -1,0 +1,29 @@
+{
+  "note": "Port is the PREFERRED port; if busy, findAvailablePort picks another. A cached client registration (existingClientPort) or an explicit positional port argument overrides it.",
+  "possible_port_range": "3335-49150",
+  "book_claimed_default": 3334,
+  "book_claim_in_range": false,
+  "endpoints": [
+    {
+      "server_url": "https://mcp.atlassian.com/v1/mcp/authv2",
+      "server_url_hash_md5": "8d8bab2a93ad41172215aecfb4b6d869",
+      "preferred_default_port": 39570,
+      "config_dir": "~/.mcp-auth/mcp-remote-0.1.38",
+      "debug_log": "~/.mcp-auth/mcp-remote-0.1.38/8d8bab2a93ad41172215aecfb4b6d869_debug.log"
+    },
+    {
+      "server_url": "https://mcp.atlassian.com/v1/mcp",
+      "server_url_hash_md5": "01910c24c5f2edcaf999bd1eaaeaeee8",
+      "preferred_default_port": 3736,
+      "config_dir": "~/.mcp-auth/mcp-remote-0.1.38",
+      "debug_log": "~/.mcp-auth/mcp-remote-0.1.38/01910c24c5f2edcaf999bd1eaaeaeee8_debug.log"
+    },
+    {
+      "server_url": "https://mcp.atlassian.com/v1/sse",
+      "server_url_hash_md5": "bbcf3c111998d8af66c1b0d7523c9a05",
+      "preferred_default_port": 5598,
+      "config_dir": "~/.mcp-auth/mcp-remote-0.1.38",
+      "debug_log": "~/.mcp-auth/mcp-remote-0.1.38/bbcf3c111998d8af66c1b0d7523c9a05_debug.log"
+    }
+  ]
+}

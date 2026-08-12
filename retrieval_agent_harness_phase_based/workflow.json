@@ -1,0 +1,339 @@
+{
+  "version": 2,
+  "workflow_id": "retrieval-agent-build-v2",
+  "commands": {
+    "start": "retrieval-phase",
+    "next": "retrieval-phase-next"
+  },
+  "shared_prompt": "retrieval_agent_harness_phase_based/_SHARED-RETRIEVAL-ENGINEERING-RULES.md",
+  "phase_2_manifest": ".sequence/phase-2-manifest.json",
+  "repair": {
+    "gate_id": "BR",
+    "max_attempts": 2,
+    "return_to": "B25"
+  },
+  "gates": [
+    {
+      "id": "D01",
+      "title": "Repository intake and inventory",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d01-repository-intake.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/01-repository-intake.json"
+      ]
+    },
+    {
+      "id": "D02",
+      "title": "Outcome, requirements, and acceptance",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d02-outcome-acceptance.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/02-outcome-acceptance.json"
+      ]
+    },
+    {
+      "id": "D03",
+      "title": "Runtime and retrieval application contract",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d03-runtime-baseline.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/03-runtime-application-contract.json"
+      ]
+    },
+    {
+      "id": "D05",
+      "title": "Backend tools, budgets, trust, and effects",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d05-tools-trust-effects.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/05-tools-trust-effects.json"
+      ]
+    },
+    {
+      "id": "D06",
+      "title": "State, cache, cleaned-data contracts, and privacy",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d06-state-data-artifacts.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/06-state-data-artifacts.json"
+      ]
+    },
+    {
+      "id": "D07",
+      "title": "Pipeline orchestration, scheduling, and lifecycle",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d07-orchestration-lifecycle.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/07-orchestration-lifecycle.json"
+      ]
+    },
+    {
+      "id": "D09",
+      "title": "Python architecture and rules",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d09-python-architecture-rules.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/09-python-architecture-rules.json"
+      ]
+    },
+    {
+      "id": "D10",
+      "title": "Code blueprint and implementation routing",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d10-code-blueprint.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/design/10-code-blueprint.json"
+      ]
+    },
+    {
+      "id": "D12",
+      "title": "Technical design assembly",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-d12-tdd-assembly.md",
+      "collaborative_edits": true,
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        "docs/retrieval-agent-technical-design.md",
+        ".sequence/phase-2-manifest.json"
+      ]
+    },
+    {
+      "id": "B14",
+      "title": "Python project configuration",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b14-pyproject.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B14",
+      "required_artifacts": [
+        ".sequence/14-pyproject-writer.json"
+      ]
+    },
+    {
+      "id": "B15",
+      "title": "Data and cleaned-record models",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b15-data-models.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B15",
+      "required_artifacts": [
+        ".sequence/15-data-model-writer.json"
+      ]
+    },
+    {
+      "id": "B16",
+      "title": "Protocols",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b16-protocols.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B16",
+      "required_artifacts": [
+        ".sequence/16-protocol-writer.json"
+      ]
+    },
+    {
+      "id": "B17",
+      "title": "Class shells",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b17-class-shells.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B17",
+      "required_artifacts": [
+        ".sequence/17-class-writer.json"
+      ]
+    },
+    {
+      "id": "B18",
+      "title": "Function signatures",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b18-function-signatures.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B18",
+      "required_artifacts": []
+    },
+    {
+      "id": "B19",
+      "title": "Function bodies",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b19-function-bodies.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B19",
+      "required_artifacts": []
+    },
+    {
+      "id": "B20",
+      "title": "Resource and cache lifecycle",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b20-resource-lifecycle.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B20",
+      "required_artifacts": []
+    },
+    {
+      "id": "B21",
+      "title": "Dependency providers and composition",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b21-dependency-providers.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B21",
+      "required_artifacts": []
+    },
+    {
+      "id": "B22",
+      "title": "Backend and interface adapters",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b22-interface-adapters.md",
+      "collaborative_edits": true,
+      "required": false,
+      "manifest_key": "B22",
+      "required_artifacts": []
+    },
+    {
+      "id": "B24",
+      "title": "Behavioral and rate-limit scenario tests",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b24-integration-tests.md",
+      "manifest_proposals": true,
+      "required": true,
+      "manifest_key": "B24",
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": []
+    },
+    {
+      "id": "B25",
+      "title": "Integration reconciliation",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b25-integration.md",
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/INTEGRATION.md"
+      ]
+    },
+    {
+      "id": "B26",
+      "title": "Static analysis and test execution",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b26-static-analysis.md",
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/static-analysis.json"
+      ]
+    },
+    {
+      "id": "B27",
+      "title": "Independent validation",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-b27-validation.md",
+      "required": true,
+      "allowed_human_decisions": [
+        "approve",
+        "revise",
+        "block"
+      ],
+      "required_artifacts": [
+        ".sequence/validation.json"
+      ],
+      "decision_routes": {
+        "revise": "BR"
+      }
+    },
+    {
+      "id": "BR",
+      "title": "Targeted repair",
+      "phase": "repair",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/gate-br-repair.md",
+      "required": false,
+      "required_artifacts": [
+        ".sequence/repair-{attempt}.json"
+      ],
+      "decision_routes": {
+        "approve": "B25",
+        "not_applicable": "B25",
+        "revise": "BR"
+      },
+      "max_attempts": 2
+    }
+  ]
+}

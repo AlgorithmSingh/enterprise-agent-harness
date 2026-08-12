@@ -1,0 +1,10 @@
+.retrieval-agent-runs/
+.simulate-retrieval-harness/
+.sequence/
+.opencode/node_modules/
+node_modules/
+*.log
+.DS_Store
+.prototype/**/.venv/
+.prototype/**/__pycache__/
+__pycache__/

@@ -1,0 +1,1 @@
+../../retrieval_agent_harness_phase_based/agents/gate-b20-resource-lifecycle.md

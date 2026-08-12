@@ -1,0 +1,94 @@
+{
+  "checks": [
+    {
+      "check": "initialize() returns InitializeResult",
+      "passed": true,
+      "detail": {
+        "protocolVersion": "2025-11-25",
+        "serverInfo": "echo-spike 1.29.0"
+      }
+    },
+    {
+      "check": "list_tools() returns the 3 registered tools",
+      "passed": true,
+      "detail": [
+        "always_fails",
+        "echo",
+        "echo_structured"
+      ]
+    },
+    {
+      "check": "no nextCursor => end of results",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "Tool carries inputSchema",
+      "passed": true,
+      "detail": {
+        "echo": [
+          "message"
+        ],
+        "echo_structured": [
+          "message"
+        ],
+        "always_fails": []
+      }
+    },
+    {
+      "check": "call_tool returns CallToolResult",
+      "passed": true,
+      "detail": "CallToolResult"
+    },
+    {
+      "check": "echo round-tripped the payload verbatim",
+      "passed": true,
+      "detail": [
+        "hello from a deterministic script"
+      ]
+    },
+    {
+      "check": "successful call has isError falsy",
+      "passed": true,
+      "detail": false
+    },
+    {
+      "check": "outputSchema tool populates structuredContent",
+      "passed": true,
+      "detail": {
+        "message": "hello from a deterministic script",
+        "length": 33
+      }
+    },
+    {
+      "check": "tool failure did NOT raise McpError",
+      "passed": true,
+      "detail": "no exception"
+    },
+    {
+      "check": "tool failure sets isError true",
+      "passed": true,
+      "detail": true
+    },
+    {
+      "check": "failure message travels in content[].text",
+      "passed": true,
+      "detail": [
+        "Error executing tool always_fails: intentional tool failure for isError contract check"
+      ]
+    },
+    {
+      "check": "unknown tool name surfaces as a protocol error (McpError)",
+      "passed": false,
+      "detail": {
+        "raised": false,
+        "isError": true,
+        "content": [
+          "Unknown tool: no_such_tool_exists"
+        ]
+      }
+    }
+  ],
+  "passed": 11,
+  "total": 12
+}

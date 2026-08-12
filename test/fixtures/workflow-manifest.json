@@ -1,0 +1,79 @@
+{
+  "version": 2,
+  "workflow_id": "retrieval-agent-test-manifest",
+  "commands": {
+    "start": "retrieval-phase",
+    "next": "retrieval-phase-next"
+  },
+  "shared_prompt": "retrieval_agent_harness_phase_based/shared.md",
+  "phase_2_manifest": ".sequence/phase-2-manifest.json",
+  "repair": {
+    "gate_id": "BR",
+    "max_attempts": 2,
+    "return_to": "B25"
+  },
+  "gates": [
+    {
+      "id": "D12",
+      "title": "Technical design assembly and approval",
+      "phase": "technical-design",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/D12.md",
+      "required": true,
+      "collaborative_edits": true,
+      "required_artifacts": [
+        "docs/retrieval-agent-technical-design.md",
+        ".sequence/phase-2-manifest.json"
+      ]
+    },
+    {
+      "id": "B14",
+      "title": "Project configuration",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/B14.md",
+      "required": false,
+      "manifest_key": "B14",
+      "required_artifacts": []
+    },
+    {
+      "id": "B15",
+      "title": "Data models",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/B15.md",
+      "required": false,
+      "collaborative_edits": true,
+      "manifest_key": "B15",
+      "required_artifacts": []
+    },
+    {
+      "id": "B25",
+      "title": "Integration reconciliation",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/B25.md",
+      "required": true,
+      "required_artifacts": []
+    },
+    {
+      "id": "B27",
+      "title": "Independent validation",
+      "phase": "implementation",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/B27.md",
+      "required": true,
+      "required_artifacts": [],
+      "decision_routes": {
+        "revise": "BR"
+      }
+    },
+    {
+      "id": "BR",
+      "title": "Bounded implementation repair",
+      "phase": "repair",
+      "agent_prompt": "retrieval_agent_harness_phase_based/agents/BR.md",
+      "required": false,
+      "required_artifacts": [],
+      "decision_routes": {
+        "approve": "B25"
+      },
+      "max_attempts": 2
+    }
+  ]
+}

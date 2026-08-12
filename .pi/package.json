@@ -1,0 +1,21 @@
+{
+  "name": "retrieval-agent-harness-pi",
+  "private": true,
+  "type": "module",
+  "description": "Project-local Pi extension dependencies. meta-harness is a co-located development file: dependency consumed through its built dist/ (see ../docs/meta-operator-design.md for the versioned-package boundary). At runtime Pi's extension loader aliases @earendil-works/pi-coding-agent, @earendil-works/pi-ai, and typebox to the installed host instances; the exact-version devDependencies here exist only for the strict typecheck and for running the extension module under plain node in tests.",
+  "scripts": {
+    "check:dist": "node node_modules/meta-harness/scripts/assert-fresh-dist.mjs",
+    "typecheck": "npm run check:dist && tsc --noEmit",
+    "test": "npm run typecheck && node --experimental-strip-types --test ../test/pi-meta-operator.test.mjs ../test/pi-adapter-contract.test.mjs"
+  },
+  "dependencies": {
+    "meta-harness": "file:../../adk-harness/meta-harness"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@types/node": "24.12.2",
+    "typebox": "1.1.38",
+    "typescript": "5.8.2"
+  }
+}

@@ -1,0 +1,395 @@
+{
+  "python": "3.12.11",
+  "executable": "/Users/ankitsingh/Documents/enterprise-workflow-harness/.prototype/002-mcp-headless-client/spike/.venv-v1/bin/python",
+  "mcp_version": "1.29.0",
+  "mcp_module_file": "/Users/ankitsingh/Documents/enterprise-workflow-harness/.prototype/002-mcp-headless-client/spike/.venv-v1/lib/python3.12/site-packages/mcp/__init__.py",
+  "mcp_import_error": null,
+  "mcp_public_names": [
+    "CallToolRequest",
+    "ClientCapabilities",
+    "ClientNotification",
+    "ClientRequest",
+    "ClientResult",
+    "ClientSession",
+    "ClientSessionGroup",
+    "CompleteRequest",
+    "CreateMessageRequest",
+    "CreateMessageResult",
+    "CreateMessageResultWithTools",
+    "ErrorData",
+    "GetPromptRequest",
+    "GetPromptResult",
+    "Implementation",
+    "IncludeContext",
+    "InitializeRequest",
+    "InitializeResult",
+    "InitializedNotification",
+    "JSONRPCError",
+    "JSONRPCRequest",
+    "JSONRPCResponse",
+    "ListPromptsRequest",
+    "ListPromptsResult",
+    "ListResourcesRequest",
+    "ListResourcesResult",
+    "ListToolsResult",
+    "LoggingLevel",
+    "LoggingMessageNotification",
+    "McpError",
+    "Notification",
+    "PingRequest",
+    "ProgressNotification",
+    "PromptsCapability",
+    "ReadResourceRequest",
+    "ReadResourceResult",
+    "Resource",
+    "ResourceUpdatedNotification",
+    "ResourcesCapability",
+    "RootsCapability",
+    "SamplingCapability",
+    "SamplingContent",
+    "SamplingContextCapability",
+    "SamplingMessage",
+    "SamplingMessageContentBlock",
+    "SamplingRole",
+    "SamplingToolsCapability",
+    "ServerCapabilities",
+    "ServerNotification",
+    "ServerRequest",
+    "ServerResult",
+    "ServerSession",
+    "SetLevelRequest",
+    "StdioServerParameters",
+    "StopReason",
+    "SubscribeRequest",
+    "Tool",
+    "ToolChoice",
+    "ToolResultContent",
+    "ToolUseContent",
+    "ToolsCapability",
+    "UnsubscribeRequest",
+    "UrlElicitationRequiredError",
+    "stdio_client",
+    "stdio_server"
+  ],
+  "imports": [
+    {
+      "target": "mcp:ClientSession",
+      "status": "ok",
+      "kind": "type",
+      "defined_in": "mcp.client.session",
+      "qualname": "ClientSession"
+    },
+    {
+      "target": "mcp:StdioServerParameters",
+      "status": "ok",
+      "kind": "ModelMetaclass",
+      "defined_in": "mcp.client.stdio",
+      "qualname": "StdioServerParameters"
+    },
+    {
+      "target": "mcp:types",
+      "status": "ok",
+      "kind": "module",
+      "defined_in": null,
+      "qualname": null
+    },
+    {
+      "target": "mcp:Client",
+      "status": "missing",
+      "error": "AttributeError: module 'mcp' has no attribute 'Client'"
+    },
+    {
+      "target": "mcp:McpError",
+      "status": "ok",
+      "kind": "type",
+      "defined_in": "mcp.shared.exceptions",
+      "qualname": "McpError"
+    },
+    {
+      "target": "mcp.client.stdio:stdio_client",
+      "status": "ok",
+      "kind": "function",
+      "defined_in": "mcp.client.stdio",
+      "qualname": "stdio_client"
+    },
+    {
+      "target": "mcp.client.stdio:StdioServerParameters",
+      "status": "ok",
+      "kind": "ModelMetaclass",
+      "defined_in": "mcp.client.stdio",
+      "qualname": "StdioServerParameters"
+    },
+    {
+      "target": "mcp.client.streamable_http:streamable_http_client",
+      "status": "ok",
+      "kind": "function",
+      "defined_in": "mcp.client.streamable_http",
+      "qualname": "streamable_http_client"
+    },
+    {
+      "target": "mcp.client.streamable_http:streamablehttp_client",
+      "status": "ok",
+      "kind": "function",
+      "defined_in": "mcp.client.streamable_http",
+      "qualname": "streamablehttp_client"
+    },
+    {
+      "target": "mcp.client.sse:sse_client",
+      "status": "ok",
+      "kind": "function",
+      "defined_in": "mcp.client.sse",
+      "qualname": "sse_client"
+    },
+    {
+      "target": "mcp.client.session:ClientSession",
+      "status": "ok",
+      "kind": "type",
+      "defined_in": "mcp.client.session",
+      "qualname": "ClientSession"
+    },
+    {
+      "target": "mcp.shared.exceptions:McpError",
+      "status": "ok",
+      "kind": "type",
+      "defined_in": "mcp.shared.exceptions",
+      "qualname": "McpError"
+    },
+    {
+      "target": "mcp.types:CallToolResult",
+      "status": "ok",
+      "kind": "ModelMetaclass",
+      "defined_in": "mcp.types",
+      "qualname": "CallToolResult"
+    },
+    {
+      "target": "mcp.types:TextContent",
+      "status": "ok",
+      "kind": "ModelMetaclass",
+      "defined_in": "mcp.types",
+      "qualname": "TextContent"
+    },
+    {
+      "target": "mcp.types:Tool",
+      "status": "ok",
+      "kind": "ModelMetaclass",
+      "defined_in": "mcp.types",
+      "qualname": "Tool"
+    },
+    {
+      "target": "mcp.types:LATEST_PROTOCOL_VERSION",
+      "status": "ok",
+      "kind": "str",
+      "defined_in": null,
+      "qualname": null
+    },
+    {
+      "target": "mcp.types:SUPPORTED_PROTOCOL_VERSIONS",
+      "status": "missing",
+      "error": "AttributeError: module 'mcp.types' has no attribute 'SUPPORTED_PROTOCOL_VERSIONS'"
+    }
+  ],
+  "signatures": {
+    "mcp.client.stdio:stdio_client": {
+      "status": "ok",
+      "signature": "(server: mcp.client.stdio.StdioServerParameters, errlog: <class 'TextIO'> = <_io.TextIOWrapper name='<stderr>' mode='w' encoding='utf-8'>)",
+      "doc_head": "Client transport for stdio: this will connect to a server by spawning a\nprocess and communicating with it over stdin/stdout."
+    },
+    "mcp.client.streamable_http:streamable_http_client": {
+      "status": "ok",
+      "signature": "(url: str, *, http_client: httpx.AsyncClient | None = None, terminate_on_close: bool = True) -> collections.abc.AsyncGenerator[tuple[anyio.streams.memory.MemoryObjectReceiveStream[mcp.shared.message.SessionMessage | Exception], anyio.streams.memory.MemoryObjectSendStream[mcp.shared.message.SessionMessage], collections.abc.Callable[[], str | None]], None]",
+      "doc_head": "Client transport for StreamableHTTP."
+    },
+    "mcp.client.streamable_http:streamablehttp_client": {
+      "status": "ok",
+      "signature": "(url: str, headers: dict[str, str] | None = None, timeout: float | datetime.timedelta = 30, sse_read_timeout: float | datetime.timedelta = 300, terminate_on_close: bool = True, httpx_client_factory: mcp.shared._httpx_utils.McpHttpClientFactory = <function create_mcp_http_client at 0x104a3b420>, auth: httpx.Auth | None = None) -> collections.abc.AsyncGenerator[tuple[anyio.streams.memory.MemoryObjectReceiveStream[mcp.shared.message.SessionMessage | Exception], anyio.streams.memory.MemoryObjectSendStream[mcp.shared.message.SessionMessage], collections.abc.Callable[[], str | None]], None]",
+      "doc_head": null
+    },
+    "mcp.client.sse:sse_client": {
+      "status": "ok",
+      "signature": "(url: str, headers: dict[str, typing.Any] | None = None, timeout: float = 5, sse_read_timeout: float = 300, httpx_client_factory: mcp.shared._httpx_utils.McpHttpClientFactory = <function create_mcp_http_client at 0x104a3b420>, auth: httpx.Auth | None = None, on_session_created: collections.abc.Callable[[str], None] | None = None)",
+      "doc_head": "Client transport for SSE."
+    }
+  },
+  "methods": {
+    "mcp:ClientSession.__init__": {
+      "status": "ok",
+      "signature": "(self, read_stream: anyio.streams.memory.MemoryObjectReceiveStream[mcp.shared.message.SessionMessage | Exception], write_stream: anyio.streams.memory.MemoryObjectSendStream[mcp.shared.message.SessionMessage], read_timeout_seconds: datetime.timedelta | None = None, sampling_callback: mcp.client.session.SamplingFnT | None = None, elicitation_callback: mcp.client.session.ElicitationFnT | None = None, list_roots_callback: mcp.client.session.ListRootsFnT | None = None, logging_callback: mcp.client.session.LoggingFnT | None = None, message_handler: mcp.client.session.MessageHandlerFnT | None = None, client_info: mcp.types.Implementation | None = None, *, sampling_capabilities: mcp.types.SamplingCapability | None = None, experimental_task_handlers: mcp.client.experimental.task_handlers.ExperimentalTaskHandlers | None = None) -> None",
+      "is_async": false,
+      "defined_in": "mcp.client.session"
+    },
+    "mcp:ClientSession.initialize": {
+      "status": "ok",
+      "signature": "(self) -> mcp.types.InitializeResult",
+      "is_async": true,
+      "defined_in": "mcp.client.session"
+    },
+    "mcp:ClientSession.list_tools": {
+      "status": "ok",
+      "signature": "(self, cursor: str | None = None, *, params: mcp.types.PaginatedRequestParams | None = None) -> mcp.types.ListToolsResult",
+      "is_async": true,
+      "defined_in": "mcp.client.session"
+    },
+    "mcp:ClientSession.call_tool": {
+      "status": "ok",
+      "signature": "(self, name: str, arguments: dict[str, typing.Any] | None = None, read_timeout_seconds: datetime.timedelta | None = None, progress_callback: mcp.shared.session.ProgressFnT | None = None, *, meta: dict[str, typing.Any] | None = None) -> mcp.types.CallToolResult",
+      "is_async": true,
+      "defined_in": "mcp.client.session"
+    },
+    "mcp:Client.__init__": {
+      "status": "missing",
+      "error": "AttributeError"
+    },
+    "mcp:Client.list_tools": {
+      "status": "missing",
+      "error": "AttributeError"
+    },
+    "mcp:Client.call_tool": {
+      "status": "missing",
+      "error": "AttributeError"
+    }
+  },
+  "constants": {
+    "mcp.client.streamable_http:MCP_DEFAULT_TIMEOUT": {
+      "status": "missing",
+      "error": "AttributeError"
+    },
+    "mcp.client.streamable_http:MCP_DEFAULT_SSE_READ_TIMEOUT": {
+      "status": "missing",
+      "error": "AttributeError"
+    },
+    "mcp.types:LATEST_PROTOCOL_VERSION": {
+      "status": "ok",
+      "value": "'2025-11-25'"
+    },
+    "mcp.types:SUPPORTED_PROTOCOL_VERSIONS": {
+      "status": "missing",
+      "error": "AttributeError"
+    },
+    "mcp.types:DEFAULT_NEGOTIATED_VERSION": {
+      "status": "ok",
+      "value": "'2025-03-26'"
+    }
+  },
+  "models": {
+    "mcp.types:CallToolResult": {
+      "status": "ok",
+      "attribute_names": [
+        "content",
+        "isError",
+        "meta",
+        "structuredContent"
+      ],
+      "fields": {
+        "meta": {
+          "alias": "_meta",
+          "annotation": "dict[str, typing.Any] | None",
+          "required": false
+        },
+        "content": {
+          "alias": null,
+          "annotation": "list[mcp.types.TextContent | mcp.types.ImageContent | mcp.types.AudioContent | mcp.types.ResourceLink | mcp.types.EmbeddedResource]",
+          "required": true
+        },
+        "structuredContent": {
+          "alias": null,
+          "annotation": "dict[str, typing.Any] | None",
+          "required": false
+        },
+        "isError": {
+          "alias": null,
+          "annotation": "<class 'bool'>",
+          "required": false
+        }
+      },
+      "populate_by_name": false
+    },
+    "mcp.types:Tool": {
+      "status": "ok",
+      "attribute_names": [
+        "annotations",
+        "description",
+        "execution",
+        "icons",
+        "inputSchema",
+        "meta",
+        "name",
+        "outputSchema",
+        "title"
+      ],
+      "fields": {
+        "name": {
+          "alias": null,
+          "annotation": "<class 'str'>",
+          "required": true
+        },
+        "title": {
+          "alias": null,
+          "annotation": "str | None",
+          "required": false
+        },
+        "description": {
+          "alias": null,
+          "annotation": "str | None",
+          "required": false
+        },
+        "inputSchema": {
+          "alias": null,
+          "annotation": "dict[str, typing.Any]",
+          "required": true
+        },
+        "outputSchema": {
+          "alias": null,
+          "annotation": "dict[str, typing.Any] | None",
+          "required": false
+        },
+        "icons": {
+          "alias": null,
+          "annotation": "list[mcp.types.Icon] | None",
+          "required": false
+        },
+        "annotations": {
+          "alias": null,
+          "annotation": "mcp.types.ToolAnnotations | None",
+          "required": false
+        },
+        "meta": {
+          "alias": "_meta",
+          "annotation": "dict[str, typing.Any] | None",
+          "required": false
+        },
+        "execution": {
+          "alias": null,
+          "annotation": "mcp.types.ToolExecution | None",
+          "required": false
+        }
+      },
+      "populate_by_name": false
+    },
+    "mcp.types:ListToolsResult": {
+      "status": "ok",
+      "attribute_names": [
+        "meta",
+        "nextCursor",
+        "tools"
+      ],
+      "fields": {
+        "meta": {
+          "alias": "_meta",
+          "annotation": "dict[str, typing.Any] | None",
+          "required": false
+        },
+        "nextCursor": {
+          "alias": null,
+          "annotation": "str | None",
+          "required": false
+        },
+        "tools": {
+          "alias": null,
+          "annotation": "list[mcp.types.Tool]",
+          "required": true
+        }
+      },
+      "populate_by_name": false
+    }
+  }
+}

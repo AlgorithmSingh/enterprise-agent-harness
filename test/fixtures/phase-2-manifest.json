@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "gates": {
+    "B14": {
+      "active": false,
+      "reason": "The existing project configuration already satisfies the approved design.",
+      "allowed_files": []
+    },
+    "B15": {
+      "active": true,
+      "reason": "The approved design requires new typed data models.",
+      "allowed_files": [
+        "src/models.py",
+        "tests/test_models.py"
+      ]
+    }
+  }
+}

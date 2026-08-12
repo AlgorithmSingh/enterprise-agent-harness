@@ -1,0 +1,48 @@
+{
+  "fastmcp_server": [
+    {
+      "case": "unknown tool name",
+      "channel": "isError result (no exception)",
+      "isError": true,
+      "text": "Unknown tool: no_such_tool"
+    },
+    {
+      "case": "missing required argument",
+      "channel": "isError result (no exception)",
+      "isError": true,
+      "text": "Error executing tool echo: 1 validation error for echoArguments\nmessage\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further informa"
+    },
+    {
+      "case": "argument of wrong type",
+      "channel": "isError result (no exception)",
+      "isError": true,
+      "text": "Error executing tool echo: 1 validation error for echoArguments\nmessage\n  Input should be a valid string [type=string_type, input_value={'not': 'a string'}, inp"
+    },
+    {
+      "case": "unexpected extra argument",
+      "channel": "result",
+      "isError": false,
+      "text": "ok"
+    },
+    {
+      "case": "tool raises at runtime",
+      "channel": "isError result (no exception)",
+      "isError": true,
+      "text": "Error executing tool always_fails: intentional tool failure for isError contract check"
+    }
+  ],
+  "bare_lowlevel_server": [
+    {
+      "case": "tools/list on server with no handlers",
+      "channel": "protocol-error (McpError raised)",
+      "code": -32601,
+      "message": "Method not found"
+    },
+    {
+      "case": "tools/call on server with no handlers",
+      "channel": "protocol-error (McpError raised)",
+      "code": -32601,
+      "message": "Method not found"
+    }
+  ]
+}

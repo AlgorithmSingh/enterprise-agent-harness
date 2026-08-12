@@ -1,0 +1,1 @@
+../../retrieval_agent_harness_phase_based/agents/gate-b22-interface-adapters.md

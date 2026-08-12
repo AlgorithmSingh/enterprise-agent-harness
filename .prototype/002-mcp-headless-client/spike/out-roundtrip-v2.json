@@ -1,0 +1,66 @@
+{
+  "checks": [
+    {
+      "check": "v2 Client.list_tools() works without explicit initialize()",
+      "passed": true,
+      "detail": [
+        "always_fails",
+        "echo",
+        "echo_structured"
+      ]
+    },
+    {
+      "check": "v2 echo round-trips the payload",
+      "passed": true,
+      "detail": [
+        "hello from a deterministic script"
+      ]
+    },
+    {
+      "check": "v2 result exposes snake_case .structured_content",
+      "passed": true,
+      "detail": [
+        "content",
+        "is_error",
+        "meta",
+        "result_type",
+        "structured_content"
+      ]
+    },
+    {
+      "check": "v2 result does NOT expose camelCase .structuredContent",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "v2 result exposes .is_error (not .isError)",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "v2 outputSchema tool populates structured_content",
+      "passed": true,
+      "detail": {
+        "message": "hello from a deterministic script",
+        "length": 33
+      }
+    },
+    {
+      "check": "v2 default: failing tool does NOT raise",
+      "passed": true,
+      "detail": "no exception"
+    },
+    {
+      "check": "v2 default: failing tool sets is_error true",
+      "passed": true,
+      "detail": true
+    },
+    {
+      "check": "v2 raise_exceptions=True turns a failing tool into an exception",
+      "passed": false,
+      "detail": "no exception raised"
+    }
+  ],
+  "passed": 8,
+  "total": 9
+}

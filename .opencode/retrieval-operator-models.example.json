@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "operator": null,
+  "gate": {
+    "providerID": "your-provider-id",
+    "modelID": "your-background-harness-model-id",
+    "variant": "your-gate-variant-if-used"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171",
+  "repository_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server",
+  "labels_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171/labels{/name}",
+  "comments_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171/comments",
+  "events_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171/events",
+  "html_url": "https://github.com/atlassian/atlassian-mcp-server/issues/171",
+  "id": 4547428315,
+  "node_id": "I_kwDOPW1rAM8AAAABDww_2w",
+  "number": 171,
+  "title": "Hitting 429 rate limits on Rovo MCP Server far below expected ~1000/hour (API token auth, Confluence) Summary",
+  "user": {
+    "login": "JaswirStillWater",
+    "id": 253030523,
+    "node_id": "U_kgDODxTwew",
+    "avatar_url": "https://avatars.githubusercontent.com/u/253030523?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/JaswirStillWater",
+    "html_url": "https://github.com/JaswirStillWater",
+    "followers_url": "https://api.github.com/users/JaswirStillWater/followers",
+    "following_url": "https://api.github.com/users/JaswirStillWater/following{/other_user}",
+    "gists_url": "https://api.github.com/users/JaswirStillWater/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/JaswirStillWater/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/JaswirStillWater/subscriptions",
+    "organizations_url": "https://api.github.com/users/JaswirStillWater/orgs",
+    "repos_url": "https://api.github.com/users/JaswirStillWater/repos",
+    "events_url": "https://api.github.com/users/JaswirStillWater/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/JaswirStillWater/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+
+  ],
+  "state": "open",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 1,
+  "created_at": "2026-05-29T09:40:37Z",
+  "updated_at": "2026-05-31T23:52:38Z",
+  "closed_at": null,
+  "assignee": null,
+  "author_association": "NONE",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "**Summary**\n\nWe're authenticating to the Atlassian Rovo MCP Server (`https://mcp.atlassian.com/v1/mcp`) using a **personal API token (Basic Auth)** and calling Confluence read tools. We expected an effective limit of at least ~1000 requests/hour, but we're hitting `429 Too Many Requests` after roughly 20 parallel calls, with only ~200–300 total calls made over a couple of hours. We'd like to understand what limit we're actually hitting and how it's calculated, because we can't find Rovo MCP–specific rate-limit numbers anywhere in the documentation.\n\n**Setup**\n\n- Endpoint: `https://mcp.atlassian.com/v1/mcp`\n- Auth: personal API token via Basic Auth (base64 `email:api_token`)\n- Token type: scoped token, app = **Rovo MCP**, expires 23 Apr 2026\n- Token scopes:\n  - `read:confluence:mcp`\n  - `read:page:confluence`\n  - `read:space:confluence`\n  - `read:hierarchical-content:confluence`\n  - `search:confluence`\n  - `search:rovo:mcp`\n- Primary tool being called: `getConfluencePage`\n- Call pattern: bursts of ~20 parallel calls\n\n**What we observe**\n\n- Total calls to `getConfluencePage` over the measured window (May 22–29): **348**.\n- Over a 24h window (May 28), calls were bursty — peaks of ~25–30 calls in a short interval — and we get `429`s on those bursts (we counted up to ~12 `429`s in a single peak interval).\n- The `429`s line up directly with our concurrency spikes, not with sustained volume. Total volume was low (~200–300 over hours), well under what we'd expect from any per-hour limit.\n- We've inspected the retry headers and only find a `Retry-After` value (seconds). We don't see `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-interval-seconds`, or `x-ratelimit-fillrate` that the Atlassian REST rate-limiting docs describe.\n\n**Our questions**\n\n1. What is the actual rate limit for the Rovo MCP Server when authenticating via **API token**? Is it a per-hour quota, a token-bucket / burst limit, a per-second concurrency cap, or something else? The public docs don't publish hard numbers for MCP calls.\n2. Is the limit applied **per token**, **per user**, **per IP**, or **per org**? We want to know what the \"1000/hour\" figure we had in mind actually refers to, if anything.\n3. Is there a **concurrency cap** independent of the volume quota? Our data strongly suggests we're being throttled on parallelism (~20 simultaneous calls), not on total requests.\n4. Are there response headers we should be reading besides `Retry-After` to see remaining budget and refill timing? If so, what are their exact names for the MCP endpoint?\n5. Do MCP tool calls route through the standard Confluence Cloud REST rate limiter, or does the MCP server impose its own separate limit on top?\n\n**What we've already checked**\n\n- Rovo MCP Server docs (auth/authorization, API token configuration, settings) — no rate-limit numbers.\n- Claude/Anthropic-side limits — these appear to be a separate concern from the Atlassian server limit.\n- `Retry-After` header — present, but only gives seconds, no quota detail.\n\n**What we'd like**\n\nEither documented rate-limit figures for the MCP endpoint under API token auth, or confirmation of whether this is a concurrency limit vs. a per-hour quota, so we can implement the right backoff/concurrency strategy.\n\n\n<img width=\"902\" height=\"104\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/e3be6194-fcd0-4a13-9abc-1b8919e7e987\" />\n\n<img width=\"902\" height=\"664\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/3206649d-ba95-4502-a7c5-a7a39645da94\" />",
+  "closed_by": null,
+  "reactions": {
+    "url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "timeline_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171/timeline",
+  "performed_via_github_app": null,
+  "state_reason": null,
+  "pinned_comment": null
+}

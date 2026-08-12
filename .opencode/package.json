@@ -1,0 +1,22 @@
+{
+  "name": "retrieval-agent-harness-opencode",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:dist": "node node_modules/meta-harness/scripts/assert-fresh-dist.mjs",
+    "typecheck": "npm run check:dist && tsc --noEmit",
+    "test": "npm run typecheck && node --experimental-strip-types --test adapter-contract.test.ts meta-operator-contract.test.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.9",
+    "@opencode-ai/sdk": "1.18.9",
+    "meta-harness": "file:../../adk-harness/meta-harness"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.2",
+    "typescript": "5.8.2"
+  }
+}

@@ -1,0 +1,49 @@
+[
+  {
+    "url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/comments/4588608109",
+    "html_url": "https://github.com/atlassian/atlassian-mcp-server/issues/171#issuecomment-4588608109",
+    "issue_url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/171",
+    "id": 4588608109,
+    "node_id": "IC_kwDOPW1rAM8AAAABEYCabQ",
+    "user": {
+      "login": "iosamaatlassian",
+      "id": 154573081,
+      "node_id": "U_kgDOCTaZGQ",
+      "avatar_url": "https://avatars.githubusercontent.com/u/154573081?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/iosamaatlassian",
+      "html_url": "https://github.com/iosamaatlassian",
+      "followers_url": "https://api.github.com/users/iosamaatlassian/followers",
+      "following_url": "https://api.github.com/users/iosamaatlassian/following{/other_user}",
+      "gists_url": "https://api.github.com/users/iosamaatlassian/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/iosamaatlassian/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/iosamaatlassian/subscriptions",
+      "organizations_url": "https://api.github.com/users/iosamaatlassian/orgs",
+      "repos_url": "https://api.github.com/users/iosamaatlassian/repos",
+      "events_url": "https://api.github.com/users/iosamaatlassian/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/iosamaatlassian/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "created_at": "2026-05-31T23:52:38Z",
+    "updated_at": "2026-05-31T23:52:38Z",
+    "body": "Thanks @JaswirStillWater for the detailed feedback. I will check with the team and get back to you on this.",
+    "author_association": "COLLABORATOR",
+    "pin": null,
+    "reactions": {
+      "url": "https://api.github.com/repos/atlassian/atlassian-mcp-server/issues/comments/4588608109/reactions",
+      "total_count": 1,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 1,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "minimized": null
+  }
+]
