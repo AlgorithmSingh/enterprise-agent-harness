@@ -38,7 +38,7 @@ From `gh help environment` (manual, accessed 2026-08-12):
 
 - With `GH_TOKEN` set, no interactive `gh auth login` is needed; this is the correct mode for a harness.
 - `gh api --hostname <string>` overrides the hostname per request (default `github.com`).
-- REST API version pinning: pass `-H "X-GitHub-Api-Version: 2022-11-28"`. Requests without the header default to version `2022-11-28`; supported versions as of 2026-08-12 are `2022-11-28` (end of support 2028-03-10) and `2026-03-10`. An unsupported version returns `410 Gone` (docs.github.com api-versions page).
+- REST API version pinning for this harness: pass `-H "X-GitHub-Api-Version: 2026-03-10"`, the version named by the creator brief and used by the binding rate-limit source. Requests without the header still default to `2022-11-28`; both versions are supported as of 2026-08-12, and an unsupported version returns `410 Gone` (docs.github.com api-versions page).
 - If authentication is entirely absent, gh exits with code `4` ("command requires authentication") before making requests. An *invalid* token surfaces as an HTTP 401 at request time → exit code `1`.
 
 ## Retrieval surface
@@ -126,6 +126,8 @@ All of these accept `-R/--repo [HOST/]OWNER/REPO`, `--jq`, and `--template`. Tem
 
 **Wrapper commands:** `gh pr/issue/run/... list` paginate internally up to `--limit`; the defaults above (30, or 20 for `run list`) silently truncate — always pass `--limit` explicitly.
 
+**Generated-scheduler rule:** `--paginate`, multi-page `gh search`, and multi-page wrapper commands are discovery/manual conveniences, not an adapter implementation. They issue page requests internally with no scheduler admission, delay, cancellation point, or per-page output bound. A generated retrieval system must invoke exactly one REST or GraphQL page per subprocess, return its headers/body/page cursor as one typed result, and let the scheduler admit the next page after charging every applicable primary and secondary bucket. Validate a REST `Link` continuation's scheme and host before extracting its path/query, and preserve the exact query identity for GraphQL cursors.
+
 ## Rate limits
 
 All numbers from docs.github.com, accessed 2026-08-12 (REST rate-limits page, GraphQL rate-limits page, search API page).
@@ -153,7 +155,7 @@ GraphQL point cost: (sum of requests needed per unique connection) ÷ 100, round
 | Constraint | Value |
 |---|---|
 | Concurrent requests | ≤ 100 |
-| REST points/minute | ≤ 900 (GET/HEAD/OPTIONS = 1 pt; POST/PATCH/PUT/DELETE = 5 pt) |
+| REST points/minute | ≤ 900 per canonical REST endpoint (GET/HEAD/OPTIONS = 1 pt; POST/PATCH/PUT/DELETE = 5 pt; some endpoint costs undisclosed) |
 | GraphQL points/minute | ≤ 2,000 (query = 1 pt; with mutations = 5 pt) |
 | CPU time | ≤ 90 s CPU per 60 s real time (≤ 60 s of that for GraphQL) |
 | Content-generating requests | ≤ 80/minute and ≤ 500/hour |
@@ -184,14 +186,17 @@ export GH_PROMPT_DISABLED=1 GH_PAGER=cat NO_COLOR=1 GH_NO_UPDATE_NOTIFIER=1
 export GH_TOKEN=***           # avoids keyring/interactive auth
 
 # 1. Raw REST, version-pinned, minimal payload via jq
-gh api -H "X-GitHub-Api-Version: 2022-11-28" \
+gh api -H "X-GitHub-Api-Version: 2026-03-10" \
   repos/{owner}/{repo}/releases --jq '.[].tag_name'
 
-# 2. Full pagination into ONE valid JSON document (per_page=100 auto-injected)
-gh api --paginate --slurp repos/{owner}/{repo}/issues > issues-pages.json
+# 2. One scheduler-visible REST page. Parse and validate rel="next", then
+#    schedule the next URL as another bounded subprocess after budget admission.
+gh api --include -H "X-GitHub-Api-Version: 2026-03-10" \
+  'repos/{owner}/{repo}/issues?per_page=100&page=1'
 
-# 3. GraphQL cursor pagination (query MUST take $endCursor and select pageInfo)
-gh api graphql --paginate --slurp -F owner='{owner}' -F name='{repo}' -f query='
+# 3. One scheduler-visible GraphQL page. Extract endCursor and schedule the next
+#    call only after charging both GraphQL budgets.
+gh api graphql -F owner='{owner}' -F name='{repo}' -f query='
   query($owner:String!,$name:String!,$endCursor:String){
     repository(owner:$owner,name:$name){
       issues(first:100, after:$endCursor){
@@ -231,15 +236,16 @@ Hard constraints a rate-limit-aware parallel scheduler must respect for the gh b
 
 - **gh never retries and never throttles.** One HTTP request per call/page, no sleeps, no backoff (verified in source). The scheduler owns 100% of retry/backoff/budget logic.
 - **Budget buckets are per token, per resource**: `core` (5,000/hr user; 1,000/hr Actions `GITHUB_TOKEN` per repo), `search` (30/min), `code_search` (10/min), `graphql` (5,000 pts/hr). Track them independently; a search-bucket 403 says nothing about core budget.
-- **Concurrency cap: ≤ 100 concurrent requests per token** (REST+GraphQL combined, secondary limit). Stay far below it; also respect ≤ 900 REST points/min and ≤ 2,000 GraphQL points/min. For GET-only retrieval, 900 pts/min = 900 requests/min ceiling.
-- **`--paginate` is a burst**: N pages = N sequential requests with zero inter-page delay, all charged to the same bucket. Budget a paginated call as ceil(expected_items/100) requests, not 1.
-- **Defaults truncate silently**: `--limit` defaults are 30 (20 for `gh run list`); search caps at 1,000 results ever. Plans needing completeness must use `gh api --paginate` (REST) or cursor GraphQL, not `gh search`.
+- **Concurrency cap: ≤ 100 concurrent requests** (REST+GraphQL combined, secondary limit). Stay far below it; also respect ≤ 900 REST points/min per canonical endpoint and ≤ 2,000 GraphQL points/min. The secondary counters are client-side because GitHub exposes no status for them.
+- **Internal pagination is forbidden in a generated scheduler**: `--paginate`, `gh search --limit` above one page, and multi-page wrapper commands issue N sequential requests with zero inter-page delay and expose no admission point between them. Invoke one page per subprocess, bound its stdout/stderr, charge it, then schedule the validated continuation. Budget a drain as `ceil(expected_items / page_size)` requests, never one.
+- **Defaults truncate silently**: `--limit` defaults are 30 (20 for `gh run list`); search caps at 1,000 results ever. Plans needing completeness must use scheduler-owned one-page `gh api` REST or GraphQL calls, not internal pagination.
 - **403/429 must be disambiguated by headers/body, not status code**: primary ⇒ `x-ratelimit-remaining: 0`, sleep until `x-ratelimit-reset`; secondary ⇒ honor `retry-after`, else ≥ 60 s exponential backoff. Secondary budget is unobservable — leave headroom.
 - **Exit codes carry no rate-limit signal**: rate-limited calls exit 1 like any other failure; the scheduler must parse stderr (`gh: API rate limit exceeded …`, `gh: … secondary rate limit …`) or run with `-i`/`GH_DEBUG=api` to see headers.
 - **`--cache` is a real lever but caches 4xx too**: 404s persist for the TTL (403s and 5xx are never cached). Use generous TTLs for immutable data (commits, closed PRs), zero for liveness checks; remember the cache key includes the token.
 - **Serialize writes; parallelize reads**: content-creating requests are capped at 80/min, 500/hr, and GitHub explicitly advises against concurrent writes — retrieval-only scheduling avoids this class entirely.
 - **Poll budget cheaply**: `GET /rate_limit` is free against the primary REST limit — safe to poll each scheduling tick, but do not spam it (it can count against secondary limits).
-- **Pin `X-GitHub-Api-Version: 2022-11-28`** on `gh api` REST calls so payload shapes cannot drift when GitHub promotes a new default version (a newer version `2026-03-10` already exists).
+- **Pin `X-GitHub-Api-Version: 2026-03-10`** on `gh api` REST calls so payload shapes match the creator brief's binding API version instead of silently using the older default.
+- **Bound every subprocess channel**: enforce a deadline plus independent stdout and stderr byte caps while streaming; a page that exceeds either cap is incomplete and must be narrowed or re-planned. Do not enable `GH_DEBUG=api` in production because verbose HTTP diagnostics are unnecessary secret-bearing data; collect the bounded response headers with `--include` instead.
 
 ## Failure modes and healing signals
 
@@ -255,7 +261,7 @@ Hard constraints a rate-limit-aware parallel scheduler must respect for the gh b
 | Search query invalid (>256 chars, >5 AND/OR/NOT) | 422 "Validation failed" | exit **1** | Rewrite query; not retryable |
 | Search timeout | 200 with `incomplete_results: true` | Exit **0** — looks like success | Treat `incomplete_results` as partial data; narrow the query and re-run |
 | GraphQL errors in a 200 | HTTP 200, body has `errors[]` | gh parses GraphQL bodies for errors even at 200: `gh: <message>` → stderr, exit **1** (source: api.go) | Inspect message: rate-limit-typed errors → back off; schema errors → fix query |
-| Mid-`--paginate` transport failure | pages 1..k−1 already fetched | Loop aborts; partial pages already on stdout; exit nonzero | Discard partial output (or dedupe on re-run); restart the whole paginated call |
+| Mid-`--paginate` transport failure (manual/discovery use only) | pages 1..k−1 already fetched | Loop aborts; partial pages already on stdout; exit nonzero | Do not use this mode in the generated adapter; scheduler-owned single-page calls persist only complete cleaned pages and resume from the last accepted continuation |
 | 5xx / network blip | 502/503/504 or connection error | No retry; exit **1**; 5xx never cached | Retry with jittered backoff (safe for GET) |
 | Stale cached rate-limit state after GraphQL exhaustion | — | `gh issue list`-style commands may keep failing after reset due to cached responses (cli/cli issue #12812 — secondary source, open bug) | Run `gh config clear-cache` (or delete the gh cache dir, e.g. `~/.cache/gh` or legacy `$TMPDIR/gh-cli-cache`) |
 

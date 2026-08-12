@@ -23,11 +23,14 @@ It is a domain sibling of the ADK and LangGraph agent harnesses: the same human-
 Open OpenCode or Pi at this repository root (or a repository this bundle has been merged into) and run `/retrieval-phase`, then `/retrieval-phase-next` after each gate completes. Manual mode needs no npm install. For the fully autonomous experience, select the `retrieval-autopilot` agent (OpenCode) or `pi -e .pi/extensions/retrieval-autopilot.ts` (Pi), state the request once, and review the run's decision ledger afterwards. Deterministic verification:
 
 ```sh
-node --test test/*.test.mjs   # self-contained; needs only Node >= 22.6
-npm test --prefix .opencode   # requires npm install and the meta-harness sibling checkout
-npm test --prefix .pi         # requires npm install and the meta-harness sibling checkout
+npm ci --prefix .opencode     # requires the meta-harness sibling checkout
+npm ci --prefix .pi           # required by the root Pi contract tests
+node --test test/*.test.mjs
+npm test --prefix .opencode
+npm test --prefix .pi
+python3 -m unittest discover -s .prototype/001-rate-limit-scheduler/spike -v
 ```
 
-**Sibling-checkout prerequisite (adapter suites and optional meta mode only):** both adapter packages resolve the generic supervisor via `file:../../adk-harness/meta-harness`, so a fresh clone must sit beside an `adk-harness` checkout (`<parent>/adk-harness/meta-harness` next to `<parent>/<this-repo>`). Without it, `npm install` under `.pi`/`.opencode` fails and the optional meta-operator is unavailable — manual mode and the root test suite are unaffected. See [`docs/project-local-installation.md`](docs/project-local-installation.md).
+**Sibling-checkout prerequisite (full verification and optional meta mode):** both adapter packages resolve the generic supervisor via `file:../../adk-harness/meta-harness`, so a fresh clone must sit beside an `adk-harness` checkout (`<parent>/adk-harness/meta-harness` next to `<parent>/<this-repo>`). Without it, `npm ci` under `.pi`/`.opencode` fails and the optional meta-operator is unavailable; manual mode remains usable, but the root suite's Pi contract files also require `.pi/node_modules`. Use Node `^22.22.2`, `^24.15.0`, or `>=26` for the locked tree. See [`docs/project-local-installation.md`](docs/project-local-installation.md).
 
 The harness ends at production-intended, pull-request-ready generation and validation; operating a generated system against live tenants remains a downstream human decision.

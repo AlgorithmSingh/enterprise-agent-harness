@@ -27,7 +27,7 @@ Which credential a request carries decides **which budget it draws from**. Only 
 | GitHub REST | Unauthenticated: 60 req/h. Personal access token: 5,000 req/h (15,000 on Enterprise Cloud). GitHub App installation: 5,000/h base, +50/h per repo above 20 and per user above 20, cap 12,500/h (Enterprise: 15,000/h). `GITHUB_TOKEN` inside Actions: 1,000 req/h **per repository** (Enterprise: 15,000). |
 | GitHub GraphQL | User: 5,000 points/h (Enterprise Cloud: 10,000). App installation: 5,000 points/h (Enterprise: 10,000). Actions `GITHUB_TOKEN`: 1,000 points/h per repository. |
 | GitHub conditional requests | A `304 Not Modified` does not count against the primary limit only "if … the request was made while correctly authorized with an `Authorization` header" — anonymous 304s still cost budget. |
-| Atlassian (Jira/Confluence Cloud) | Points quota is attached to the **app + tenant**, not the user: Tier 1 default is a single global pool of 65,000 points/h shared across *all* tenants of the app; Tier 2 is per-tenant (see Rate limits). Note: current docs (accessed 2026-08-12) describe enforcement as per-tenant and per-endpoint — **not** the older "per-user, per-app" model (that older framing no longer appears on the fetched pages; treat it as superseded). |
+| Atlassian (Jira/Confluence Cloud) | Points quota is attached to the **app**, not the user: Tier 1 default is one global 65,000-point/h pool shared across every tenant of that app; only a reviewed Tier 2 allocation creates separate app-and-tenant pools. Burst buckets are independently keyed by tenant, endpoint, and method. API-token traffic does not spend the points quota. |
 | Datadog | Limits are scoped **per endpoint at the organization, per-user, or per-API-key level** depending on the limit (Datadog's usage metrics report all three dimensions; the events limit is explicitly per org), so every script sharing the org — and especially the same key — draws from shared budgets. `X-RateLimit-Name` names the specific limit for support-ticket increase requests. (Exact auth header names for Datadog are covered in the Datadog chapter; not re-verified here.) |
 
 Scheduler consequence: **budget identity = (provider, credential/tenant, resource bucket)**. Two pipelines using the same PAT, the same Datadog org, or the same Atlassian app share one budget and must share one pacer — reserve headroom for the other consumer (design heuristic; see utilization targets below).
@@ -83,7 +83,7 @@ Pagination multiplies request count, so it is a budget input, not a detail:
 | Constraint | Value |
 |---|---|
 | Concurrent requests (REST + GraphQL combined) | ≤ 100 |
-| REST points/min ("for REST API endpoints") | ≤ 900 |
+| REST points/min ("to a single endpoint per minute") | ≤ 900 per canonical REST endpoint/route |
 | GraphQL points/min | ≤ 2,000 |
 | CPU time | ≤ 90 s CPU per 60 s real time (GraphQL portion ≤ 60 s) |
 | Content-generating requests | ≤ 80/min and ≤ 500/h |
@@ -120,7 +120,7 @@ Three simultaneous, independent systems (docs accessed 2026-08-12):
 | Backend | On limit | Semantics |
 |---|---|---|
 | GitHub primary | **403 or 429** | `x-ratelimit-remaining: 0`; do not retry until `x-ratelimit-reset` (UTC epoch seconds) |
-| GitHub secondary | **403 or 429** + error message | if `retry-after` present, wait exactly that many seconds; else if `x-ratelimit-remaining` is 0, wait until `x-ratelimit-reset`; else wait ≥ 1 minute and back off exponentially. Persisting anyway risks integration ban |
+| GitHub secondary | **403 or 429** + error message | if `retry-after` present, do not retry before that deadline and use any longer computed backoff; else if `x-ratelimit-remaining` is 0, wait until `x-ratelimit-reset`; else wait ≥ 1 minute and back off exponentially. Persisting anyway risks integration ban |
 | Jira/Confluence | **429**; **503** for transient failures (may carry `Retry-After`) | `Retry-After` = seconds to wait; `RateLimit-Reason` says which system tripped (`jira-quota-global-based`, `jira-burst-based`, `jira-per-issue-on-write`, `confluence-quota-global-based`); Atlassian: "If present, use the `Retry-After` header value as the minimum delay" |
 | Datadog | **429** | wait `X-RateLimit-Reset` seconds (delta) |
 
@@ -159,7 +159,7 @@ The invariant to test is a **count**, not a rate: at most `limit × UTILIZATION 
 Enforce the paced rate with a token bucket per **bucket key**, never a single global one, because providers meter buckets independently:
 
 - GitHub: `core`, `search`, `code_search`, `graphql`, … — key on `x-ratelimit-resource` from live responses (plus a process-wide semaphore of ≤ 100 concurrent requests across REST *and* GraphQL).
-- Atlassian: per (tenant, endpoint, method) for burst limits — Atlassian describes these as token buckets server-side — plus one points-quota bucket per (app, tenant), plus a per-issue write bucket.
+- Atlassian: per (tenant, endpoint, method) for burst limits — Atlassian describes these as token buckets server-side — plus one app-global points bucket for default Tier 1 or separate (app, tenant) buckets only for approved Tier 2, plus a per-issue write bucket.
 - Datadog: per `X-RateLimit-Name` family within the org.
 
 ```
@@ -377,9 +377,9 @@ curl -s -o /dev/null -D - <any Jira Cloud REST GET with your auth> \
 
 Hard constraints a rate-limit-aware parallel scheduler must respect:
 
-- **One pacer per budget identity** (provider × credential/tenant/org × resource bucket). GitHub `core`, `search`, `code_search`, and `graphql` are separate budgets (`x-ratelimit-resource`); Atlassian meters per (app, tenant) points plus per-endpoint-per-method burst buckets plus per-issue write buckets; Datadog meters per `X-RateLimit-Name` family at org, per-user, or per-API-key scope depending on the limit.
+- **One pacer per budget identity** (provider × credential/tenant/org × resource bucket). GitHub `core`, `search`, `code_search`, and `graphql` are separate primary budgets (`x-ratelimit-resource`), while the 900-point secondary REST budget is keyed by canonical endpoint and the GraphQL minute budget by its one endpoint. Atlassian uses one app-global Tier 1 points pool or approved app-and-tenant Tier 2 pools, plus tenant/endpoint/method burst and per-issue write buckets. Datadog meters per `X-RateLimit-Name` family at org, per-user, or per-API-key scope depending on the limit.
 - **GitHub global concurrency cap: never more than 100 requests in flight** across REST and GraphQL combined — enforce with a process-wide semaphore; GitHub's own best practice for avoiding secondary limits is serial requests through a queue.
-- **GitHub secondary throughput caps**: ≤ 900 REST points/min and ≤ 2,000 GraphQL points/min, with writes costing 5 points vs 1 for reads — a scheduler doing writes must weight its minute-bucket accordingly, and content-generating requests are further capped at 80/min, 500/h.
+- **GitHub secondary throughput caps**: ≤ 900 REST points/min to each canonical endpoint and ≤ 2,000 GraphQL points/min, with writes costing 5 points vs 1 for reads and some REST endpoint costs undisclosed. Track these windows client-side because GitHub exposes no secondary-budget status; content-generating requests are further capped at 80/min, 500/h.
 - **`Retry-After` (and `x-ratelimit-reset` at `remaining: 0`) overrides every computed backoff** — sleep at least that long, never less; treat it as a minimum (Atlassian's explicit rule).
 - **When `remaining` hits 0, stop the bucket entirely until the reset deadline** — GitHub warns continued requests can get the integration banned.
 - **Normalize reset semantics before doing math**: GitHub = UTC epoch seconds; Datadog = delta seconds until reset (period is calendar-aligned); Atlassian = ISO 8601 timestamp. Mixing them corrupts every pacing computation downstream.
@@ -396,7 +396,7 @@ Hard constraints a rate-limit-aware parallel scheduler must respect:
 | Wire signature | Diagnosis | Healing action for a script-healing agent |
 |---|---|---|
 | GitHub 403 **or** 429, `x-ratelimit-remaining: 0`, `x-ratelimit-resource: <bucket>` | Primary budget of that bucket exhausted | Freeze only that bucket's pacer until `x-ratelimit-reset` (epoch s); let other buckets continue; on resume, slow-start. Verify with free `GET /rate_limit` |
-| GitHub 403/429 **with `retry-after`** and an error message, while `x-ratelimit-remaining` > 0 | Secondary limit (concurrency, points/min, CPU, or content-creation) | Sleep exactly `retry-after` seconds; halve concurrency; if it recurs, drop to serial queued requests (GitHub's documented remedy); check for a concurrent-workers bug (> 100 in flight) |
+| GitHub 403/429 **with `retry-after`** and an error message, while `x-ratelimit-remaining` > 0 | Secondary limit (concurrency, points/min, CPU, or content-creation) | Do not retry before `retry-after`; use any longer jittered backoff and jitter re-entry, halve concurrency, and if it recurs drop to serial queued requests; check for a concurrent-workers bug (> 100 in flight) |
 | GitHub 200 but `x-ratelimit-remaining` falling faster than the scheduler's own accounting | Another consumer shares the token | Increase RESERVE, lower utilization target; alert owner to split credentials |
 | GitHub 304 Not Modified | Conditional hit — content unchanged | Serve cache; confirm request was authorized (anonymous 304s still spend budget); no retry logic involved |
 | Jira/Confluence 429, `Retry-After: <s>`, `RateLimit-Reason: jira-burst-based` | Per-endpoint per-second burst bucket emptied | Sleep ≥ `Retry-After`; lower that endpoint's token-bucket rate (defaults: GET/POST 100 rps, PUT/DELETE 50 rps are ceilings, not entitlements) |
@@ -423,7 +423,7 @@ All fetched 2026-08-12; extraction caches in `.web-docs/` (filenames `undefined-
 | https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api | All GitHub primary/secondary numbers, header names, 403-or-429 semantics, /rate_limit cost, ban warning |
 | https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api | retry-after/reset handling order, serial-requests guidance, ETag/Last-Modified flows, 304-not-counted rule |
 | https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api | Link header format, per_page max 100, page/before/after/since parameters |
-| https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28 | Search 30/min, code search 10/min, unauthenticated 10/min, 1,000-result cap |
+| https://docs.github.com/en/rest/search/search?apiVersion=2026-03-10 | Search 30/min, code search 10/min, unauthenticated 10/min, 1,000-result cap |
 | https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api | GraphQL points/hour by principal, point formula (÷100, min 1), 500,000-node limit, rateLimit fields |
 | https://developer.atlassian.com/cloud/jira/platform/rate-limiting/ | Jira per-tenant scope, points tiers (65,000 global; 100k–150k+users; 500k cap), burst rps, per-issue writes, headers incl. NearLimit/RateLimit-Reason, Retry-After-as-minimum, recommended backoff constants |
 | https://developer.atlassian.com/cloud/confluence/rate-limiting/ | Confluence global-pool quota (65,000/h), same header family, confluence-quota-global-based reason |

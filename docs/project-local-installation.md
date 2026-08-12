@@ -25,17 +25,20 @@ Pi's `.pi/settings.json` force-excludes `extensions/retrieval-meta-operator.ts` 
 
 ## Deterministic setup
 
-The manual adapter needs only the project-local bundle. The optional meta-operator additionally needs the generic `meta-harness` package, resolved in this development layout via `file:../../adk-harness/meta-harness`, with installed package dependencies:
+The root control-plane suite imports the Pi extension contract tests, so a full fresh-clone verification requires both adapter dependency trees even when day-to-day manual mode does not. The optional meta-operator additionally needs the generic `meta-harness` package, resolved in this development layout via `file:../../adk-harness/meta-harness`. From the repository root:
 
 ```sh
-cd ../adk-harness/meta-harness && npm install && npm test
-cd ../../enterprise-workflow-harness/.opencode && npm install && npm test
-cd ../.pi && npm install && npm test
+npm ci --prefix .opencode
+npm ci --prefix .pi
+node --test test/*.test.mjs
+npm test --prefix .opencode
+npm test --prefix .pi
+python3 -m unittest discover -s .prototype/001-rate-limit-scheduler/spike -v
 ```
 
-The relative commands assume the shell begins in `enterprise-workflow-harness`. Each host package runs a deterministic `check:dist` before typechecking, so a missing, stale, incomplete, or altered `meta-harness` build fails closed. When `meta-harness` is absent entirely, the OpenCode loader exposes no meta tools and manual mode keeps working without any npm install.
+The `file:../../adk-harness/meta-harness` dependency means `npm ci` requires a sibling checkout at `<parent>/adk-harness/meta-harness`; each host package runs a deterministic `check:dist` before typechecking, so a missing, stale, incomplete, or altered build fails closed. When that sibling is absent, manual mode still loads without npm, but the full root and adapter verification suites are unavailable and must be reported as such rather than called self-contained.
 
-Use a supported Node line; the deterministic verification for this bundle completed under Node v23.11.0 (`engines` requires >= 22.6). Review any npm advisories against the locked tree and host threat model instead of applying an unreviewed automatic major-version fix.
+Use Node `^22.22.2`, `^24.15.0`, or `>=26`; the locked OpenCode dependency tree contains `ini@7`, which declares Node 23 unsupported even though the local package's older broad engine declaration permits it. Node v23.11.0 passed the suites during repository creation but emitted an engine warning and is not a supported clean-install baseline. Review any npm advisories against the locked tree and host threat model instead of applying an unreviewed automatic major-version fix. The Pi packages are exact dev/test mirrors of the installed host API, so update them only with a matching Pi host upgrade and rerun both Pi suites.
 
 Create real, ignored model configuration files from the examples:
 

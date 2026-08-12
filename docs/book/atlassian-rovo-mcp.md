@@ -258,9 +258,9 @@ rm -rf ~/.mcp-auth                                                          # nu
 Hard constraints a rate-limit-aware parallel scheduler must respect for this backend:
 
 - **Hourly site budget:** 500 (Free) / 1,000 (Standard) / 1,000 + 20×users capped at 10,000 (Premium/Enterprise) calls per hour, **shared across every user and client on the site** — the scheduler's budget is global per site, not per worker.
-- **Count client-side.** No budget/remaining headers exist; maintain a local counter per site per rolling hour and stop dispatching before the cap.
-- **Low concurrency cap.** Community evidence (official-repo issue #171, Atlassian-unconfirmed) shows 429s at ~20 parallel calls independent of hourly volume. Keep parallelism well below that (single-digit worker pool) until Atlassian documents a burst limit.
-- **On 429: honor `Retry-After` (seconds) exactly**; it is the only throttle signal on the wire. Pause the whole site bucket, not just the failing worker.
+- **Count client-side, conservatively.** No budget/remaining headers or reset semantics are published. Maintain a local per-site 60-minute sliding-window counter as a conservative client policy and stop dispatching before the plan cap; do not claim that Atlassian itself uses a rolling window.
+- **Low starting concurrency is a heuristic, not a provider cap.** One unresolved official-repo issue reports 429s around 20 parallel calls independent of hourly volume. Start with configurable single-digit concurrency, mark that choice unverified, and adapt downward from observed 429s until Atlassian documents a burst limit.
+- **On 429: treat observed `Retry-After` seconds as a strict minimum**, then apply any longer jittered backoff and jittered re-entry. The header behavior comes from the unresolved issue report, not published Rovo documentation. Pause the whole site bucket, not just the failing worker.
 - **One discovery call, then cache:** call `getAccessibleAtlassianResources` once and pin `cloudId`; every avoided rediscovery call is budget saved.
 - **Bucket by site (`cloudId`).** Limits are site-level; multi-site schedulers need one budget/queue per `cloudId`. With API-token auth, tokens are cross-site, so a wrong `cloudId` is a silent cross-site query, not an error — validate `cloudId` on every job.
 - **Endpoint pinning:** use `https://mcp.atlassian.com/v1/mcp/authv2`; never `/v1/sse` (unsupported after 2026-06-30); never `/v1/mcp/preview` for production (tools/responses may change).
@@ -274,7 +274,7 @@ Hard constraints a rate-limit-aware parallel scheduler must respect for this bac
 
 | Failure | On the wire | Healing action |
 |---|---|---|
-| Rate limited | HTTP `429 Too Many Requests`, `Retry-After: <seconds>` header, no x-ratelimit-* headers (secondary source: official-repo issue #171) | Sleep exactly `Retry-After`, halve concurrency for the site bucket, resume; persistently bursty 429s ⇒ serialize |
+| Rate limited | HTTP `429 Too Many Requests`, `Retry-After: <seconds>` header, no x-ratelimit-* headers (secondary source: unresolved official-repo issue #171) | Do not retry before `Retry-After`; use any longer jittered backoff, halve concurrency for the site bucket, jitter re-entry, and serialize if bursts persist |
 | IP allowlist block | Tool call fails with "You don't have permission to connect from this IP address. Please ask your admin for access." (OAuth consent screen may still appear before calls fail) | Not self-healable: operator must add the egress IP/VPN range to the org IP allowlist; note some AI tools use their own outbound IPs |
 | Expired/invalid OAuth token | Silent failure: no data or empty/partial results, no clean error ("your session will silently fail") | Re-run `npx mcp-remote` (or the client's auth flow); if stuck, `rm -rf ~/.mcp-auth` and re-auth; verify granted scopes |
 | Stale DCR cache (post-May-27-2026) | Auth flow fails; old `client_id`/discovery doc "will not be recognised by the new server" | Purge cached OAuth metadata (`~/.mcp-auth` for mcp-remote), re-register via `/v1/mcp/authv2` |
