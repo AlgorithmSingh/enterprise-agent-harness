@@ -109,6 +109,7 @@ interface OperatorSurface {
   runTool: string;
   gateTool: string;
   transitionTool: string;
+  intakeProvenance: string;
 }
 
 /**
@@ -126,6 +127,7 @@ export const OPERATOR_SURFACES: Record<OperatorSurfaceId, OperatorSurface> = {
     runTool: "retrieval_meta_run",
     gateTool: "retrieval_meta_gate",
     transitionTool: "retrieval_meta_transition",
+    intakeProvenance: "retrieval_meta_run(start) human-confirmed intake",
   },
   auto: {
     id: "auto",
@@ -136,6 +138,7 @@ export const OPERATOR_SURFACES: Record<OperatorSurfaceId, OperatorSurface> = {
     runTool: "retrieval_auto_run",
     gateTool: "retrieval_auto_gate",
     transitionTool: "retrieval_auto_transition",
+    intakeProvenance: "retrieval_auto_run(start) autopilot intake",
   },
 };
 
@@ -630,9 +633,15 @@ function pendingRequestView(runtime: OperatorRuntime): Record<string, unknown> |
     payload: request.payload,
   };
   if (request.kind === "permission") {
-    view.human_approval_block = request.authorizationCanonical;
-    view.note =
-      "Approval requires the human to send exactly the human_approval_block text as their next message; rejection needs only a reason.";
+    if (runtime.surface.id === "meta") {
+      view.human_approval_block = request.authorizationCanonical;
+      view.note =
+        "Approval requires the human to send exactly the human_approval_block text as their next message; rejection needs only a reason.";
+    } else {
+      view.payload_sha256 = createHash("sha256").update(request.payload).digest("hex");
+      view.note =
+        "Inspect the complete payload, including its resolved working directory, then use permission_reply with approve true or false and a rationale.";
+    }
   }
   return view;
 }
@@ -646,9 +655,28 @@ async function rejectOversizedHostRequest(
   runtime: OperatorRuntime,
   kind: "question" | "permission",
   requestID: string,
-  size: number
+  payload: string
 ): Promise<Record<string, unknown>> {
+  const size = payload.length;
   const reason = `request payload is ${size} characters, above the ${MAX_REQUEST_PAYLOAD_CHARS}-character relay limit; ask something smaller`;
+  if (kind === "question") {
+    await ledgerAutoAction(runtime, {
+      event: "question_answered",
+      request_id: `host:${requestID}`,
+      reason,
+      source: "operator-reject",
+      oversized: true,
+    });
+  } else {
+    await ledgerAutoAction(runtime, {
+      event: "shell_approval",
+      request_id: `host:${requestID}`,
+      approved: false,
+      rationale: reason,
+      payload_sha256: createHash("sha256").update(payload).digest("hex"),
+      oversized: true,
+    });
+  }
   if (kind === "question") {
     const response = await runtime.client.question.reject({ requestID, directory: runtime.directory });
     if (response.error !== undefined && response.error !== null) {
@@ -684,11 +712,25 @@ async function requireCurrentHostRequestPayload(
       `the exact recorded host ${kind} is no longer pending for the recorded worker session`
     );
   }
-  if (canonicalHostPayload(current) !== persistedPayload) {
+  if (canonicalRequestPayload(runtime, kind, current) !== persistedPayload) {
     throw new Error(
       `the pending host ${kind} payload changed after adoption; refusing the stale operator action`
     );
   }
+}
+
+function canonicalRequestPayload(
+  runtime: OperatorRuntime,
+  kind: "question" | "permission",
+  request: HostQuestion | HostPermission,
+): string {
+  if (kind === "permission" && runtime.surface.id === "auto") {
+    return canonicalHostPayload({
+      host_permission: request,
+      resolved_working_directory: runtime.directory,
+    });
+  }
+  return canonicalHostPayload(request);
 }
 
 async function adoptHostRequest(runtime: OperatorRuntime): Promise<Record<string, unknown> | null> {
@@ -700,9 +742,9 @@ async function adoptHostRequest(runtime: OperatorRuntime): Promise<Record<string
     (request) => request.sessionID === worker.hostSessionId
   );
   if (question) {
-    const payload = canonicalHostPayload(question);
+    const payload = canonicalRequestPayload(runtime, "question", question);
     if (payload.length > MAX_REQUEST_PAYLOAD_CHARS) {
-      return rejectOversizedHostRequest(runtime, "question", question.id, payload.length);
+      return rejectOversizedHostRequest(runtime, "question", question.id, payload);
     }
     await runtime.supervisor.openRequest({
       workerId: worker.workerId,
@@ -716,9 +758,9 @@ async function adoptHostRequest(runtime: OperatorRuntime): Promise<Record<string
     (request) => request.sessionID === worker.hostSessionId
   );
   if (permission) {
-    const payload = canonicalHostPayload(permission);
+    const payload = canonicalRequestPayload(runtime, "permission", permission);
     if (payload.length > MAX_REQUEST_PAYLOAD_CHARS) {
-      return rejectOversizedHostRequest(runtime, "permission", permission.id, payload.length);
+      return rejectOversizedHostRequest(runtime, "permission", permission.id, payload);
     }
     await runtime.supervisor.openRequest({
       workerId: worker.workerId,
@@ -782,12 +824,12 @@ async function seedApprovedContext(
   await runtime.supervisor.approveFact({
     runId,
     text: `Kickoff target repository: ${intake.targetRepoPath}`,
-    provenance: { kind: "kickoff", source: "retrieval_meta_run(start) human-confirmed intake" },
+    provenance: { kind: "kickoff", source: runtime.surface.intakeProvenance },
   });
   await runtime.supervisor.approveFact({
     runId,
     text: `Kickoff initial idea: ${intake.initialIdea}`,
-    provenance: { kind: "kickoff", source: "retrieval_meta_run(start) human-confirmed intake" },
+    provenance: { kind: "kickoff", source: runtime.surface.intakeProvenance },
   });
   for (const ruleFile of RULE_FILES) {
     try {
@@ -1341,6 +1383,7 @@ export async function gateAction(
     source?: "approved-context" | "human";
     reason?: string;
     afterMessageId?: string;
+    transcriptStart?: "tail" | "beginning";
     timeoutSeconds?: number;
     /** Auto surface: the operator's own decision on a shell request. */
     approve?: boolean;
@@ -1399,10 +1442,20 @@ export async function gateAction(
         worker.status === "active" ? await verifyGateModelIfExposed(runtime) : worker.modelVerification;
       const request = worker.status === "active" ? await adoptHostRequest(runtime) : pendingRequestView(runtime);
       const messages = await rawMessages(runtime.client, runtime.directory, worker.hostSessionId);
+      const located = args.afterMessageId
+        ? messages.findIndex((entry) => entry.info.id === args.afterMessageId)
+        : -1;
+      if (args.afterMessageId && located < 0) {
+        throw new Error(`afterMessageId ${args.afterMessageId} is not in the recorded worker transcript`);
+      }
       const startIndex = args.afterMessageId
-        ? messages.findIndex((entry) => entry.info.id === args.afterMessageId) + 1
-        : Math.max(messages.length - 20, 0);
-      const transcript = messages.slice(startIndex).map((entry) => {
+        ? located + 1
+        : args.transcriptStart === "beginning"
+          ? 0
+          : Math.max(messages.length - 20, 0);
+      const page = messages.slice(startIndex, startIndex + 20);
+      let truncatedTextParts = 0;
+      const transcript = page.map((entry) => {
         const info = entry.info as {
           id?: string;
           role?: string;
@@ -1416,7 +1469,10 @@ export async function gateAction(
               part !== null &&
               (part as { type?: string }).type === "text"
           )
-          .map((part) => part.text.slice(0, 2_000));
+          .map((part) => {
+            if (part.text.length > 2_000) truncatedTextParts += 1;
+            return part.text.slice(0, 2_000);
+          });
         const tools = entry.parts
           .filter(
             (part): part is { type: "tool"; tool: string } =>
@@ -1439,6 +1495,20 @@ export async function gateAction(
         model_verification: verification,
         pending_request: request,
         transcript,
+        transcript_scope: {
+          start_index: startIndex,
+          returned_messages: transcript.length,
+          total_messages: messages.length,
+          has_earlier_messages: startIndex > 0,
+          has_later_messages: startIndex + page.length < messages.length,
+          next_after_message_id:
+            startIndex + page.length < messages.length
+              ? (page.at(-1)?.info.id ?? null)
+              : null,
+          truncated_text_parts: truncatedTextParts,
+          note:
+            "Text parts above 2000 characters are marked by truncated_text_parts; use durable evidence files for complete raw output.",
+        },
         review: reviewSummary(review),
       });
     }
@@ -1503,6 +1573,14 @@ export async function gateAction(
           worker.hostSessionId,
           pending.payload,
         );
+        await ledgerAutoAction(runtime, {
+          event: "question_answered",
+          gate_id: pending.task.taskId,
+          attempt: pending.task.attempt,
+          request_id: pending.requestId,
+          reason: args.reason.trim(),
+          source: "operator-reject",
+        });
         const response = await runtime.client.question.reject({
           requestID: pending.hostRequestId,
           directory: runtime.directory,
@@ -1519,14 +1597,6 @@ export async function gateAction(
             citedFactIds: [],
             detail: args.reason.trim(),
           },
-        });
-        await ledgerAutoAction(runtime, {
-          event: "question_answered",
-          gate_id: pending.task.taskId,
-          attempt: pending.task.attempt,
-          request_id: pending.requestId,
-          reason: args.reason.trim(),
-          source: "operator-reject",
         });
         return json({ outcome: "rejected" });
       }
@@ -1585,6 +1655,16 @@ export async function gateAction(
         worker.hostSessionId,
         pending.payload,
       );
+      await ledgerAutoAction(runtime, {
+        event: "question_answered",
+        gate_id: pending.task.taskId,
+        attempt: pending.task.attempt,
+        request_id: pending.requestId,
+        answer: JSON.stringify(answers),
+        source,
+        rationale,
+        cited_fact_ids: citedFactIds,
+      });
       const response = await runtime.client.question.reply({
         requestID: pending.hostRequestId,
         directory: runtime.directory,
@@ -1602,16 +1682,6 @@ export async function gateAction(
           citedFactIds,
           detail: JSON.stringify(answers),
         },
-      });
-      await ledgerAutoAction(runtime, {
-        event: "question_answered",
-        gate_id: pending.task.taskId,
-        attempt: pending.task.attempt,
-        request_id: pending.requestId,
-        answer: JSON.stringify(answers),
-        source,
-        rationale,
-        cited_fact_ids: citedFactIds,
       });
       return json({ outcome: "answered", source, citedFactIds });
     }
@@ -1662,6 +1732,15 @@ export async function gateAction(
           worker.hostSessionId,
           pending.payload,
         );
+        await ledgerAutoAction(runtime, {
+          event: "shell_approval",
+          gate_id: pending.task.taskId,
+          attempt: pending.task.attempt,
+          request_id: pending.requestId,
+          approved: false,
+          rationale: denialReason,
+          payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
+        });
         const response = await runtime.client.permission.reply({
           requestID: pending.hostRequestId,
           directory: runtime.directory,
@@ -1680,15 +1759,6 @@ export async function gateAction(
             citedFactIds: [],
             detail: denialReason,
           },
-        });
-        await ledgerAutoAction(runtime, {
-          event: "shell_approval",
-          gate_id: pending.task.taskId,
-          attempt: pending.task.attempt,
-          request_id: pending.requestId,
-          approved: false,
-          rationale: denialReason,
-          payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
         });
         return json({ outcome: "rejected" });
       }
@@ -1716,6 +1786,15 @@ export async function gateAction(
         worker.hostSessionId,
         pending.payload,
       );
+      await ledgerAutoAction(runtime, {
+        event: "shell_approval",
+        gate_id: pending.task.taskId,
+        attempt: pending.task.attempt,
+        request_id: pending.requestId,
+        approved: true,
+        rationale,
+        payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
+      });
       const response = await runtime.client.permission.reply({
         requestID: pending.hostRequestId,
         directory: runtime.directory,
@@ -1733,15 +1812,6 @@ export async function gateAction(
           citedFactIds: [],
           detail: "approved once",
         },
-      });
-      await ledgerAutoAction(runtime, {
-        event: "shell_approval",
-        gate_id: pending.task.taskId,
-        attempt: pending.task.attempt,
-        request_id: pending.requestId,
-        approved: true,
-        rationale,
-        payload_sha256: createHash("sha256").update(pending.payload).digest("hex"),
       });
       return json({ outcome: "approved_once" });
     }
@@ -2075,6 +2145,18 @@ export async function transitionAction(
             runtime.directory,
             sessionID,
           );
+          if (auto) {
+            await appendAutopilotLedger(runDir, {
+              event: "gate_decision_intent",
+              gate_id: parsed.run.gate_id,
+              attempt: parsed.run.attempt,
+              decision: parsed.decision.value,
+              reason: parsed.decision.reason,
+              rationale,
+              agent_recommendation: parsed.agent_recommendation,
+              review_manifest_sha256: parsed.review_manifest_sha256,
+            });
+          }
         },
         afterDecision: async () => {
           decisionCommitted = true;

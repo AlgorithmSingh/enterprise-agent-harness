@@ -27,13 +27,25 @@ export async function appendAutopilotLedger(runDir, entry) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     throw new Error("an autopilot ledger entry must be a plain object");
   }
+  const prototype = Object.getPrototypeOf(entry);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("an autopilot ledger entry must be a plain object");
+  }
+  if (typeof entry.toJSON === "function") {
+    throw new Error("an autopilot ledger entry may not define toJSON");
+  }
   if (typeof entry.event !== "string" || !entry.event.trim()) {
     throw new Error("an autopilot ledger entry requires a non-empty event name");
   }
-  const record = { ...entry, recorded_at: new Date().toISOString() };
+  const recordedAt = new Date().toISOString();
+  const record = { ...entry, recorded_at: recordedAt };
   const line = JSON.stringify(record);
   if (line.includes("\n")) {
     throw new Error("an autopilot ledger entry must serialize to a single line");
+  }
+  const persisted = JSON.parse(line);
+  if (persisted.event !== entry.event || persisted.recorded_at !== recordedAt) {
+    throw new Error("the autopilot ledger entry changed during serialization");
   }
   const directory = path.join(runDir, LEDGER_DIRECTORY);
   await mkdir(directory, { recursive: true });
@@ -41,7 +53,7 @@ export async function appendAutopilotLedger(runDir, entry) {
   // Return exactly what the audit trail now holds; serialization drops
   // undefined and function-valued fields, and callers must not believe
   // they recorded something the ledger does not contain.
-  return JSON.parse(line);
+  return persisted;
 }
 
 /**

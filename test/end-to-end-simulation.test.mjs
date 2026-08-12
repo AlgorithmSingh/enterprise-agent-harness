@@ -25,6 +25,21 @@ import {
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("the autopilot ledger rejects serialization hooks that can replace audited fields", async (t) => {
+  const runDir = await mkdtemp(path.join(os.tmpdir(), "retrieval-agent-ledger-contract-"));
+  t.after(() => rm(runDir, { recursive: true, force: true }));
+  await assert.rejects(
+    appendAutopilotLedger(runDir, {
+      event: "gate_decision",
+      toJSON() {
+        return { event: "substituted" };
+      }
+    }),
+    /may not define toJSON/
+  );
+  assert.deepEqual(await readAutopilotLedger(runDir), []);
+});
+
 async function projectCopy(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "retrieval-agent-e2e-"));
   t.after(() => rm(root, { recursive: true, force: true }));

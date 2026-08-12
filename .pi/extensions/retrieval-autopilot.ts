@@ -31,6 +31,17 @@ import {
 /** Canonical single owner of the autopilot judgment doctrine. */
 const OPERATOR_PROMPT_FILE =
   "retrieval_agent_harness_phase_based/agents/retrieval-autopilot-operator.md";
+const OPERATOR_PROMPT_SNIPPET =
+  "Drive the Retrieval gate sequence autonomously under the installed operator doctrine; use only these audited control tools and read-only inspection tools.";
+const OPERATOR_ACTIVE_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "retrieval_auto_run",
+  "retrieval_auto_gate",
+  "retrieval_auto_transition",
+];
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -105,12 +116,27 @@ export default async function retrievalAutopilotPi(
     );
   });
 
+  // The canonical doctrine is a real system instruction, not a one-line tool
+  // description. Pi deliberately normalizes promptSnippet whitespace, so
+  // preserve the exact Markdown body through the installed system-prompt hook.
+  pi.on("before_agent_start", (event) => ({
+    systemPrompt: `${event.systemPrompt}\n\n# Retrieval autopilot operator doctrine\n\n${doctrine}`,
+  }));
+
+  // OpenCode enforces these restrictions from the canonical frontmatter. Pi
+  // does not interpret that frontmatter, so make the same trust boundary
+  // mechanical: the visible operator can inspect bytes but cannot write or run
+  // an unaudited shell outside the worker-request path.
+  pi.on("session_start", () => {
+    pi.setActiveTools(OPERATOR_ACTIVE_TOOLS);
+  });
+
   pi.registerTool({
     name: "retrieval_auto_run",
     label: "Retrieval autopilot run control",
     description:
       "Retrieval autopilot run control: status (includes approved fact ids and the live worker), start with the exact kickoff values you restated to the human, resume a blocked run the human asked you to resume, or recover an interrupted launch. Launches background gates on the explicitly configured harness/gate model.",
-    promptSnippet: doctrine,
+    promptSnippet: OPERATOR_PROMPT_SNIPPET,
     parameters: Type.Object({
       action: StringEnum(["status", "start", "resume", "recover"]),
       targetRepoPath: Type.Optional(Type.String()),
@@ -146,6 +172,7 @@ export default async function retrievalAutopilotPi(
       approve: Type.Optional(Type.Boolean()),
       rationale: Type.Optional(Type.String()),
       reason: Type.Optional(Type.String()),
+      transcriptOffset: Type.Optional(Type.Number()),
       timeoutSeconds: Type.Optional(Type.Number()),
     }),
     execute: async (_id, params, _signal, _onUpdate, ctx) =>

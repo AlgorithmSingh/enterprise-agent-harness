@@ -1320,8 +1320,16 @@ function launchDeliveryPending(run) {
 }
 
 function assertAttemptMode(run, expectedMode) {
-  if (!expectedMode || !run.state.current_attempt) return;
+  if (!run.state.current_attempt) return;
   const actual = run.state.current_attempt.session?.mode ?? "manual";
+  if (!expectedMode) {
+    if (actual !== "manual") {
+      fail(
+        `the active attempt is owned by ${actual} session mode; a commanding surface must identify itself`
+      );
+    }
+    return;
+  }
   if (actual !== expectedMode) {
     fail(
       `the active attempt is owned by ${actual} session mode; continue through that operator surface`

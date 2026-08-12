@@ -2,7 +2,7 @@
 type: Guide
 title: Retrieval Harness Operator Quick Reference
 description: Summarizes the manual commands, human decisions, run states, result envelope, recovery behavior, and the autopilot mode for the Retrieval agent harness.
-timestamp: 2026-08-12T14:30:00-04:00
+timestamp: 2026-08-12T11:44:32-04:00
 ---
 
 # Retrieval Harness Operator Quick Reference
@@ -58,8 +58,7 @@ The agent recommendation is advisory. Cancellation commits nothing. The current 
 
 In [autopilot mode](autopilot-design.md) you talk to one visible operator agent (`retrieval-autopilot` in OpenCode; `pi -e .pi/extensions/retrieval-autopilot.ts` in Pi), state the request once, and the agent runs the whole sequence: it launches gate workers, reviews results under its judgment doctrine, decides approve/revise/block, answers worker questions, and approves shell commands after inspecting the exact bytes. You watch progress in conversation and can interrupt at any time.
 
-- Every authority action is recorded with rationale in `.retrieval-agent-runs/<run-id>/autopilot/decisions.jsonl`; `last_decision.decided_by_mode` in the run state records `auto` durably.
+- Every ordinary authority action is recorded with rationale in `.retrieval-agent-runs/<run-id>/autopilot/decisions.jsonl`; gate commits have a pre-commit `gate_decision_intent` and post-commit `gate_decision`, while `last_decision.decided_by_mode` in the authoritative run state records `auto` durably.
 - You are interrupted only for critical blockers: a block decision, an exhausted bound (two revises per gate, forty launches per run), a fail-closed runtime refusal, credential exposure, or a shell request the doctrine forbids.
-- A blocked autopilot run resumes only after you tell the operator to resume, with your instruction relayed as the resume reason.
+- The doctrine allows a blocked autopilot run to resume only after you tell the operator to resume. The tool requires and ledgers the relayed reason but cannot authenticate who authored the preceding conversation message.
 - An auto-owned attempt refuses the manual and meta surfaces (and vice versa); use one operator surface per run.
-

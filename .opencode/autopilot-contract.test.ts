@@ -576,6 +576,15 @@ test("shell approval and denial each relay to the host and ledger the payload di
   };
   client.permissions = [approvedRequest];
   const pending = await adoptRequest(runtime, "permission");
+  const pendingPayload = JSON.parse(pending.payload) as {
+    resolved_working_directory: string;
+    host_permission: Record<string, unknown>;
+  };
+  assert.equal(pendingPayload.resolved_working_directory, root);
+  assert.equal(pendingPayload.host_permission.id, "perm-1");
+  const pendingView = pending as unknown as Record<string, unknown>;
+  assert.equal(pendingView.human_approval_block, undefined);
+  assert.match(String(pendingView.note), /permission_reply/);
 
   await assert.rejects(
     gateAction(runtime, autoContext(), {
@@ -676,6 +685,7 @@ test("no auto-surface resolution is ever recorded as the human's", async (t) => 
     .listFacts({ runId: run.state.run_id })
     .find((fact) => fact.text.includes("Kickoff target repository"));
   assert.ok(kickoff);
+  assert.equal(kickoff.provenance.source, "retrieval_auto_run(start) autopilot intake");
 
   client.questions = [
     { id: "q-1", sessionID: "ses-gate-1", questions: [{ question: "Scope?", header: "scope" }] },
@@ -751,6 +761,37 @@ test("no auto-surface resolution is ever recorded as the human's", async (t) => 
     "approved-context",
     "operator-reject",
   ]);
+});
+
+test("a shell decision is durable before OpenCode can apply it", async (t) => {
+  const { runtime, client, root, supervisor } = await fixture(t);
+  await startRun(runtime);
+  client.permissions = [{
+    id: "perm-ledger-failure",
+    sessionID: "ses-gate-1",
+    permission: "bash",
+    patterns: ["python -m pytest"],
+    metadata: { command: "python -m pytest" },
+    always: [],
+  }];
+  const pending = await adoptRequest(runtime, "permission");
+  const run = await loadActiveRun(root);
+  assert.ok(run);
+  const ledgerDirectory = path.join(run.runDir, "autopilot");
+  await rm(ledgerDirectory, { recursive: true, force: true });
+  await writeFile(ledgerDirectory, "not a directory\n");
+
+  await assert.rejects(
+    gateAction(runtime, autoContext(), {
+      action: "permission_reply",
+      requestId: pending.requestId,
+      approve: true,
+      rationale: "The exact command only runs repository tests.",
+    }),
+    /EEXIST|ENOTDIR|not a directory/i,
+  );
+  assert.equal(client.permissionReplies.length, 0, "the host never receives an unledgered approval");
+  assert.equal(supervisor.getPendingRequest()?.requestId, pending.requestId);
 });
 
 test("a third revise is refused as a revise-cap escalation", async (t) => {
@@ -955,6 +996,17 @@ test("the autopilot plugin exposes exactly the three auto tools", async () => {
     "retrieval_auto_run",
     "retrieval_auto_transition",
   ]);
+  const runTool = hooks.tool.retrieval_auto_run as {
+    execute: (args: unknown, context: unknown) => Promise<unknown>;
+  };
+  await assert.rejects(
+    runTool.execute(
+      { action: "status" },
+      { agent: "general", sessionID: "s", messageID: "m", directory: "/nonexistent" },
+    ),
+    /reserved for the retrieval-autopilot agent/,
+    "wrong-agent calls are refused before runtime loading can claim supervisor state",
+  );
 });
 
 test("the optional autopilot loader degrades only for the missing generic package", async () => {
@@ -986,6 +1038,16 @@ test("the optional autopilot loader degrades only for the missing generic packag
       })
     ),
     true
+  );
+  assert.equal(
+    module.isMissingGenericPackage(
+      Object.assign(
+        new Error("Cannot find package 'nested-x' imported from /tmp/meta-harness/dist/index.js"),
+        { code: "ERR_MODULE_NOT_FOUND" },
+      )
+    ),
+    false,
+    "a broken nested dependency must remain fatal",
   );
   assert.equal(
     module.isMissingGenericPackage(

@@ -27,6 +27,14 @@ import {
 
 const SURFACE = OPERATOR_SURFACES.auto;
 
+function assertAutopilotCaller(context: { agent: string }): void {
+  if (context.agent !== SURFACE.agent) {
+    throw new Error(
+      `this tool is reserved for the ${SURFACE.agent} agent (caller: ${context.agent})`,
+    );
+  }
+}
+
 const server: Plugin = async (input) => {
   let runtimePromise: Promise<OperatorRuntime> | null = null;
   const runtimeFor = (): Promise<OperatorRuntime> => {
@@ -46,6 +54,7 @@ const server: Plugin = async (input) => {
           resumeReason: tool.schema.string().optional(),
         },
         async execute(args, context) {
+          assertAutopilotCaller(context);
           return runAction(await runtimeFor(), context, args);
         },
       }),
@@ -72,9 +81,11 @@ const server: Plugin = async (input) => {
           rationale: tool.schema.string().optional(),
           reason: tool.schema.string().optional(),
           afterMessageId: tool.schema.string().optional(),
+          transcriptStart: tool.schema.enum(["tail", "beginning"]).optional(),
           timeoutSeconds: tool.schema.number().optional(),
         },
         async execute(args, context) {
+          assertAutopilotCaller(context);
           return gateAction(await runtimeFor(), context, args);
         },
       }),
@@ -88,6 +99,7 @@ const server: Plugin = async (input) => {
           rationale: tool.schema.string().optional(),
         },
         async execute(args, context) {
+          assertAutopilotCaller(context);
           return transitionAction(await runtimeFor(), context, args);
         },
       }),

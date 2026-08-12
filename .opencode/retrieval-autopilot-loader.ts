@@ -11,10 +11,11 @@ import type { Plugin } from "@opencode-ai/plugin";
 /** The one tolerable load failure; exported so the contract test pins it. */
 export function isMissingGenericPackage(error: unknown): boolean {
   const candidate = error as { code?: unknown; message?: unknown } | null;
+  const message = typeof candidate?.message === "string" ? candidate.message : "";
   return (
     candidate?.code === "ERR_MODULE_NOT_FOUND" &&
-    typeof candidate.message === "string" &&
-    candidate.message.includes("meta-harness")
+    (/Cannot find package ['"]meta-harness['"]/.test(message) ||
+      /Cannot find module ['"][^'"]*\/meta-harness(?:\/[^'"]*)?['"]/.test(message))
   );
 }
 

@@ -2,7 +2,7 @@
 type: Guide
 title: Retrieval Harness Project-Local Installation
 description: Explains how to place, configure, load, and deterministically verify the Retrieval OpenCode and Pi adapters and their optional meta-operator and autopilot modes.
-timestamp: 2026-08-12T14:30:00-04:00
+timestamp: 2026-08-12T11:44:32-04:00
 ---
 
 # Retrieval Harness Project-Local Installation
@@ -25,7 +25,7 @@ Pi's `.pi/settings.json` force-excludes `extensions/retrieval-meta-operator.ts` 
 
 ## Deterministic setup
 
-The root control-plane suite imports the Pi extension contract tests, so a full fresh-clone verification requires both adapter dependency trees even when day-to-day manual mode does not. The optional meta-operator additionally needs the generic `meta-harness` package, resolved in this development layout via `file:../../adk-harness/meta-harness`. From the repository root:
+The root control-plane suite imports the Pi extension contract tests, so a full fresh-clone verification requires both adapter dependency trees even when day-to-day manual mode does not. The optional meta-operator and autopilot surfaces additionally need the generic `meta-harness` package, resolved in this development layout via `file:../../adk-harness/meta-harness`. From the repository root:
 
 ```sh
 npm ci --prefix .opencode
@@ -59,7 +59,7 @@ For the fully autonomous [autopilot mode](autopilot-design.md), select the `retr
 pi -e .pi/extensions/retrieval-autopilot.ts
 ```
 
-Autopilot uses the same model-role files (the background `gate` role is required) and keeps its own supervisor state under `.opencode/.retrieval-auto/` and `.pi/.retrieval-auto/`. Load exactly one operator surface per run — manual, meta, or autopilot; mode ownership fails closed on crossover regardless. Opting into autopilot accepts its documented trust boundary: the operator agent takes gate decisions and approves worker shell commands itself, recording every authority action in the run's decision ledger.
+Autopilot uses the same model-role files (the background `gate` role is required) and keeps its own supervisor state under `.opencode/.retrieval-auto/` and `.pi/.retrieval-auto/`. The Pi extension injects the canonical doctrine as a system-prompt section and restricts the visible operator to `read`, `grep`, `find`, `ls`, and the three `retrieval_auto_*` tools; its own unaudited shell and mutation tools are not active. Load exactly one operator surface per run — manual, meta, or autopilot; mode ownership fails closed on crossover regardless.
 
 Do not remove Pi's normal-discovery exclusions to enable these modes. A successful local install proves package and adapter compatibility, not live backend credentials (gh auth, Atlassian MCP consent, Datadog keys), provider behavior, generated-system correctness, or deployment.
 
@@ -67,7 +67,7 @@ Do not remove Pi's normal-discovery exclusions to enable these modes. A successf
 
 Run one non-production interactive smoke in each host after configuring real ignored model files and authenticating the selected models. For OpenCode, use an initialized, non-global Git project and start the session from the exact Git root that is also the harness target and session directory. The host request must carry `path=""`, allowing the adapter to resolve and verify that exact root; a global project identity or a nested working directory is intentionally rejected. Exercise start, one worker exchange, human review, transition, clean retirement, and restart recovery without pointing the smoke at production data or effects.
 
-For Pi, load either normal manual mode or the explicit meta extension, not both ownership modes for one run. Exercise the same lifecycle and verify clean shutdown. Treat the forced status-1 process exit on any cleanup failure that prevents a safe shutdown outcome as the expected fail-closed result and validate dead-owner recovery in a disposable session.
+For Pi, load exactly one of normal manual mode, the explicit meta extension, or the explicit autopilot extension. For autopilot, verify the active tool list excludes `bash`, `edit`, and `write`, exercise one benign worker-shell approval and one denial, inspect the ledger, and verify clean shutdown. Treat the forced status-1 process exit on any cleanup failure that prevents a safe shutdown outcome as the expected fail-closed result and validate dead-owner recovery in a disposable session.
 
 ## Portability boundary
 

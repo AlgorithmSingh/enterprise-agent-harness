@@ -840,6 +840,35 @@ test("manual and meta commands cannot decide an attempt owned by the autopilot",
   assert.equal(run.state.last_decision, null);
 });
 
+test("a mode-less caller cannot decide a supervised attempt", async (t) => {
+  const { root } = await fixture(t);
+  await runStartCommand({
+    repoRoot: root,
+    host: "pi",
+    sessionMode: "auto",
+    intake: {
+      targetRepoPath: root,
+      initialIdea: "Require every supervised decision caller to identify its authority surface."
+    },
+    launch: async () => ({ id: "auto-D01", mode: "auto" })
+  });
+  await writeReadyResult(root);
+
+  await assert.rejects(
+    runNextCommand({
+      repoRoot: root,
+      host: "pi",
+      display: async () => assert.fail("a mode-less caller must not see a supervised result"),
+      decide: async () => assert.fail("a mode-less caller must not decide a supervised result"),
+      launch: async () => assert.fail("a mode-less caller must not transition a supervised attempt")
+    }),
+    /commanding surface must identify itself/
+  );
+  const run = await loadActiveRun(root);
+  assert.equal(run.state.current_attempt.session.mode, "auto");
+  assert.equal(run.state.last_decision, null);
+});
+
 test("autopilot commands cannot decide an attempt owned by a human surface", async (t) => {
   const { root } = await fixture(t);
   await runStartCommand({

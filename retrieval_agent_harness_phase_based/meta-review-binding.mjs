@@ -60,6 +60,9 @@ function assertWorkerBinding(gateWorker, run, review) {
       "the recorded gate worker belongs to a different run, gate, or attempt than the reviewed result"
     );
   }
+  if (!["finished", "aborted", "interrupted"].includes(gateWorker.status)) {
+    throw new Error("a transition binding requires a terminal gate worker");
+  }
   if (
     !gateWorker.hostSessionId ||
     gateWorker.hostSessionId !== review.attempt.session.id

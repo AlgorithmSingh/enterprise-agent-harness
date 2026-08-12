@@ -627,6 +627,56 @@ test("the launch cap refuses a resume that would start another gate attempt", as
   assert.deepEqual(escalations.map((entry) => entry.kind), ["run_blocked", "launch_cap"]);
 });
 
+test("the launch cap still permits non-launching block and final completion decisions", async (t) => {
+  await t.test("block remains reachable", async (t) => {
+    const { root } = await fixture(t);
+    const { bindings } = fakeBindings();
+    const core = autopilot(bindings);
+    const ctx = fakeContext(root);
+    await startRun(core, ctx, root);
+    const run = await loadActiveRun(root);
+    const capped = structuredClone(run.state);
+    capped.attempts = { D01: 1, D02: 39 };
+    await writeFile(path.join(run.runDir, "workflow-state.json"), `${JSON.stringify(capped, null, 2)}\n`);
+
+    const blocked = await decideGate(core, ctx, root, {
+      gateId: "D01",
+      artifacts: [".sequence/d01-notes.json"],
+      decision: "block",
+      reason: "The capped run needs human direction.",
+      rationale: "Blocking launches no worker and is the bounded escalation path."
+    });
+    assert.equal(blocked.kind, "blocked");
+    assert.equal((await loadActiveRun(root)).state.status, "blocked");
+  });
+
+  await t.test("final approval remains reachable", async (t) => {
+    const { root } = await fixture(t);
+    const { bindings } = fakeBindings();
+    const core = autopilot(bindings);
+    const ctx = fakeContext(root);
+    await startRun(core, ctx, root);
+    const first = await decideGate(core, ctx, root, {
+      gateId: "D01",
+      artifacts: [".sequence/d01-notes.json"],
+      decision: "approve",
+      rationale: "The inventory and its declared evidence agree."
+    });
+    assert.equal(first.launched_gate, "D02");
+    const run = await loadActiveRun(root);
+    const capped = structuredClone(run.state);
+    capped.attempts = { D01: 39, D02: 1 };
+    await writeFile(path.join(run.runDir, "workflow-state.json"), `${JSON.stringify(capped, null, 2)}\n`);
+
+    const completed = await decideGate(core, ctx, root, {
+      gateId: "D02",
+      decision: "approve",
+      rationale: "The final contract and its checked oracle agree."
+    });
+    assert.equal(completed.kind, "complete");
+  });
+});
+
 test("a manual-surface command refuses an auto-owned attempt", async (t) => {
   const { root } = await fixture(t);
   const { bindings } = fakeBindings();
@@ -677,9 +727,11 @@ test("the autopilot extension registers its three tools, the doctrine, and shutd
   const module = await import(autopilotModulePath);
   const tools = [];
   const handlers = [];
+  const activeToolSets = [];
   await module.default({
     registerTool: (definition) => tools.push(definition),
-    on: (event, handler) => handlers.push({ event, handler })
+    on: (event, handler) => handlers.push({ event, handler }),
+    setActiveTools: (names) => activeToolSets.push(names)
   });
 
   assert.deepEqual(
@@ -687,6 +739,8 @@ test("the autopilot extension registers its three tools, the doctrine, and shutd
     ["retrieval_auto_gate", "retrieval_auto_run", "retrieval_auto_transition"]
   );
   assert.ok(handlers.some((entry) => entry.event === "session_shutdown"));
+  assert.ok(handlers.some((entry) => entry.event === "session_start"));
+  assert.ok(handlers.some((entry) => entry.event === "before_agent_start"));
   for (const tool of tools) {
     const schema = JSON.stringify(tool.parameters);
     assert.ok(!schema.includes("anyOf"), `${tool.name} must not use Type.Union/Type.Literal unions`);
@@ -695,12 +749,25 @@ test("the autopilot extension registers its three tools, the doctrine, and shutd
   const runTool = tools.find((tool) => tool.name === "retrieval_auto_run");
   assert.deepEqual(runTool.parameters.properties.action.enum, ["status", "start", "resume", "recover"]);
   assert.equal(runTool.parameters.properties.action.type, "string");
-  assert.ok(
-    !runTool.promptSnippet.startsWith("---"),
-    "the doctrine is attached with its frontmatter stripped"
-  );
-  assert.match(runTool.promptSnippet, /^You are the Retrieval autopilot operator\./);
-  assert.match(runTool.promptSnippet, /# Bounds and escalation/);
+  assert.ok(!runTool.promptSnippet.includes("\n"), "promptSnippet stays a genuine one-line tool summary");
+  const promptResult = await handlers
+    .find((entry) => entry.event === "before_agent_start")
+    .handler({ systemPrompt: "BASE" });
+  assert.match(promptResult.systemPrompt, /^BASE\n\n# Retrieval autopilot operator doctrine\n\nYou are/);
+  assert.match(promptResult.systemPrompt, /# Bounds and escalation/);
+  handlers.find((entry) => entry.event === "session_start").handler({ reason: "startup" });
+  assert.deepEqual(activeToolSets, [[
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "retrieval_auto_run",
+    "retrieval_auto_gate",
+    "retrieval_auto_transition"
+  ]]);
+  assert.ok(!activeToolSets[0].includes("bash"));
+  assert.ok(!activeToolSets[0].includes("edit"));
+  assert.ok(!activeToolSets[0].includes("write"));
   const gateTool = tools.find((tool) => tool.name === "retrieval_auto_gate");
   assert.deepEqual(gateTool.parameters.properties.source.enum, ["approved-context", "auto-operator"]);
   assert.equal(gateTool.parameters.properties.approve.type, "boolean");
@@ -713,7 +780,11 @@ test("the autopilot extension registers its three tools, the doctrine, and shutd
   const lifecycle = [];
   const terminations = [];
   await module.default(
-    { registerTool: () => {}, on: (event, handler) => lifecycle.push({ event, handler }) },
+    {
+      registerTool: () => {},
+      on: (event, handler) => lifecycle.push({ event, handler }),
+      setActiveTools: () => {}
+    },
     { core, terminateProcess: (exitCode) => terminations.push(exitCode) }
   );
   await lifecycle.find((entry) => entry.event === "session_shutdown").handler({ reason: "quit" });

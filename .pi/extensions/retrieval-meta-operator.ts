@@ -168,6 +168,10 @@ export interface PiWorkerHandle {
   dispose(): void;
   stats(): { inputTokens: number | null; outputTokens: number | null; cost: number | null } | null;
   transcriptTail(limit: number): Array<{ role: string; text: string }>;
+  transcriptPage?(offset: number, limit: number): {
+    entries: Array<{ role: string; text: string; text_truncated?: boolean }>;
+    total: number;
+  };
 }
 
 export interface CreateWorkerInput {
@@ -535,6 +539,25 @@ export class PiMetaOperatorCore {
       } catch (error) {
         if (error instanceof MetaHarnessError && error.code === "payload_too_large") {
           // Never truncate authorization-bearing content: reject it outright.
+          if (this.#isAuto && this.#cwd) {
+            const digest = createHash("sha256").update(request.payload).digest("hex");
+            await this.#ledger(this.#cwd, request.kind === "permission"
+              ? {
+                  event: "shell_approval",
+                  request_id: `oversized:${digest}`,
+                  approved: false,
+                  rationale: error.message,
+                  payload_sha256: digest,
+                  oversized: true,
+                }
+              : {
+                  event: "question_answered",
+                  request_id: `oversized:${digest}`,
+                  reason: error.message,
+                  source: "operator-reject",
+                  oversized: true,
+                });
+          }
           return { approved: false, answer: null, reason: error.message };
         }
         throw error;
@@ -795,7 +818,20 @@ export class PiMetaOperatorCore {
       if (!run?.state.current_attempt) return null;
       const workflow = await loadWorkflow(cwd);
       const review = await inspectCurrentResult(workflow, run);
-      return { status: review.status, ...(review.error ? { error: review.error } : {}) };
+      if (review.status !== "ready") {
+        return { status: review.status, ...(review.error ? { error: review.error } : {}) };
+      }
+      return {
+        status: "ready",
+        gate: review.gate,
+        attempt: review.attempt?.number,
+        recommendation: review.result?.recommendation,
+        summary: review.result?.summary,
+        artifacts: review.result?.artifacts,
+        evidence: review.result?.evidence,
+        uncertainties: review.result?.uncertainties,
+        blockers: review.result?.blockers,
+      };
     } catch (error) {
       return { status: "error", error: errorText(error) };
     }
@@ -835,6 +871,14 @@ export class PiMetaOperatorCore {
       if (supervisor) {
         const worker = supervisor.getWorker();
         if (worker && !isTerminalWorkerStatus(worker.status)) {
+          if (this.#isAuto && this.#cwd) {
+            await this.#ledger(this.#cwd, {
+              event: "worker_aborted",
+              gate_id: worker.task.taskId,
+              attempt: worker.task.attempt,
+              reason,
+            });
+          }
           await supervisor.abortWorker({ reason });
         }
         await supervisor.releaseOwnership();
@@ -1229,6 +1273,7 @@ export class PiMetaOperatorCore {
       /** Auto surface: the explicit shell verdict. */
       approve?: boolean;
       reason?: string;
+      transcriptOffset?: number;
       timeoutSeconds?: number;
     }
   ): Promise<string> {
@@ -1257,13 +1302,26 @@ export class PiMetaOperatorCore {
       }
 
       if (args.action === "read") {
+        const offset = Math.max(0, Math.floor(args.transcriptOffset ?? 0));
+        const page = this.#worker?.transcriptPage?.(offset, 20) ?? null;
+        const transcript = page?.entries ?? this.#worker?.transcriptTail(20) ?? [];
         return json({
           worker,
           worker_in_memory: this.#worker !== null,
           worker_run_error: this.#worker?.runError() ?? null,
           model_verification: worker?.modelVerification ?? null,
           pending_request: supervisor.getPendingRequest(),
-          transcript: this.#worker?.transcriptTail(20) ?? [],
+          transcript,
+          transcript_scope: {
+            kind: page ? "page" : "tail",
+            offset: page ? offset : null,
+            limit: 20,
+            total_messages: page?.total ?? null,
+            has_later_messages: page ? offset + transcript.length < page.total : null,
+            next_offset: page && offset + transcript.length < page.total ? offset + transcript.length : null,
+            note: "Text above 2000 characters is explicitly marked as truncated; inspect durable evidence files for complete raw output.",
+          },
+          review: await this.#reviewStatus(cwd),
           usage_live: this.#worker?.stats() ?? null,
         });
       }
@@ -1711,6 +1769,7 @@ export class PiMetaOperatorCore {
       const parsed = JSON.parse(proposal.canonical.slice(proposal.canonical.indexOf("\n") + 1)) as {
         decision: { value: "approve" | "revise" | "block" | "not_applicable"; reason: string | null };
         run: { gate_id: string; attempt: number };
+        next: { status: string; gate_id: string | null };
       };
       let rationale: string | null = null;
       let runDir: string | undefined;
@@ -1736,17 +1795,19 @@ export class PiMetaOperatorCore {
             runDir
           );
         }
-        const spent = await this.#launchBudgetExceeded(cwd);
-        if (spent !== null) {
-          return await this.#escalate(
-            cwd,
-            {
-              kind: "launch_cap",
-              detail: `the run has already launched ${spent} gate attempts (cap ${RUN_LAUNCH_CAP}); committing would start another`,
-              total_attempts: spent,
-            },
-            runDir
-          );
+        if (parsed.next.status === "active" && parsed.next.gate_id) {
+          const spent = await this.#launchBudgetExceeded(cwd);
+          if (spent !== null) {
+            return await this.#escalate(
+              cwd,
+              {
+                kind: "launch_cap",
+                detail: `the run has already launched ${spent} gate attempts (cap ${RUN_LAUNCH_CAP}); committing would launch ${parsed.next.gate_id}`,
+                total_attempts: spent,
+              },
+              runDir
+            );
+          }
         }
       }
       let rejection: string | null = null;
@@ -1859,6 +1920,22 @@ export class PiMetaOperatorCore {
               runDir
             );
           },
+          afterReviewSnapshot: async () => {
+            await this.#ledger(
+              cwd,
+              {
+                event: "gate_decision_intent",
+                gate_id: parsed.run.gate_id,
+                attempt: parsed.run.attempt,
+                decision: parsed.decision.value,
+                reason: parsed.decision.reason,
+                rationale,
+                agent_recommendation: decided?.agentRecommendation ?? null,
+                review_manifest_sha256: decided?.reviewManifestSha256 ?? null,
+              },
+              runDir
+            );
+          },
           launch: this.#metaLaunch(supervisor, policy, ctx, cwd, recoveryStore),
         })) as WorkflowOutcomeLike;
       } finally {
@@ -1926,7 +2003,11 @@ export function createRealBindings(): PiHostBindings {
         requestBashApproval: async (command) => {
           const outcome = await input.onRequest({
             kind: "permission",
-            payload: JSON.stringify({ permission: "bash", command }),
+            payload: JSON.stringify({
+              permission: "bash",
+              command,
+              ...(input.attempt.sessionMode === "auto" ? { cwd: input.cwd } : {}),
+            }),
           });
           return {
             approved: outcome.approved,
@@ -2091,6 +2172,32 @@ export function createRealBindings(): PiHostBindings {
             }
             return { role, text: text.slice(0, 2_000) };
           });
+        },
+        transcriptPage: (offset: number, limit: number) => {
+          const messages = session.messages.slice(offset, offset + limit);
+          const entries = messages.map((message) => {
+            const role = (message as { role?: string }).role ?? "unknown";
+            const content = (message as { content?: unknown }).content;
+            let text = "";
+            if (typeof content === "string") text = content;
+            else if (Array.isArray(content)) {
+              text = content
+                .filter(
+                  (part): part is { type: "text"; text: string } =>
+                    typeof part === "object" &&
+                    part !== null &&
+                    (part as { type?: string }).type === "text"
+                )
+                .map((part) => part.text)
+                .join("\n");
+            }
+            return {
+              role,
+              text: text.slice(0, 2_000),
+              ...(text.length > 2_000 ? { text_truncated: true } : {}),
+            };
+          });
+          return { entries, total: session.messages.length };
         },
       };
     },
