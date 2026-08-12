@@ -104,7 +104,7 @@ Verified mechanics from the pagination guide:
 | Limit | Value |
 |---|---|
 | Concurrent requests | ≤ 100, **shared across REST and GraphQL** |
-| REST points per minute | ≤ 900 points/min across REST API endpoints |
+| REST points per minute | ≤ 900 points/min for a single REST endpoint; track by canonical endpoint/route identity because GitHub exposes no secondary-budget status |
 | GraphQL points per minute | ≤ 2,000 points/min for the GraphQL endpoint |
 | Content-generating requests | ≤ 80/min and ≤ 500/hour in general; some endpoints lower; web-UI, REST, and GraphQL actions all count |
 | CPU time | ≤ 90 s CPU per 60 s real time; ≤ 60 s of that for GraphQL |
@@ -213,7 +213,7 @@ Hard constraints a rate-limit-aware parallel scheduler MUST respect for GitHub:
 
 - **Model buckets separately.** `core`, `search`, `code_search`, `graphql` (and the specialty buckets) are independent budgets with independent windows. Attribute every response to a bucket via `x-ratelimit-resource`; never let a drained `search` bucket stall `core` work or vice versa.
 - **Global concurrency cap: 100** in-flight requests, shared across REST and GraphQL. Use one shared semaphore for both APIs; a safe pipeline stays well below 100.
-- **Per-minute point budgets:** ≤ 900 points/min REST (i.e. at most 900 GETs/min, or 180 writes/min, or a weighted mix at 1/5 points each) and ≤ 2,000 points/min GraphQL (queries 1, mutation-bearing calls 5).
+- **Per-minute point budgets:** ≤ 900 points/min for each REST endpoint (i.e. at most 900 ordinary GETs/min or 180 ordinary writes/min to one endpoint, or a weighted mix at 1/5 points each) and ≤ 2,000 points/min for the GraphQL endpoint (queries 1, mutation-bearing calls 5). Key the REST counter by a canonical route identity, not the broad primary `core` resource; some REST endpoint costs are undisclosed, so an unknown cost is not permission to run at the nominal ceiling.
 - **Hourly budgets by identity:** 5,000 req/hr (PAT) is the default planning number; GitHub App installations range 5,000–12,500; Actions `GITHUB_TOKEN` is only 1,000/hr per repo. The scheduler must know which identity class its token is.
 - **Search is scarce:** 30 req/min (`search`), 10 req/min (`code_search`). Queue search work on its own per-minute token buckets and never fan out searches in parallel bursts.
 - **Writes are serialized:** issue POST/PATCH/PUT/DELETE (and GraphQL mutations) strictly serially with ≥ 1 second between them; additionally cap content-generating requests at ≤ 80/min and ≤ 500/hour.
@@ -227,7 +227,7 @@ Hard constraints a rate-limit-aware parallel scheduler MUST respect for GitHub:
 
 | Wire signal | Diagnosis | Healing action |
 |---|---|---|
-| `403` or `429`, body mentions secondary rate limit, `retry-after: N` present | Secondary limit tripped | Sleep exactly N seconds; drop concurrency to 1; resume serially; re-raise concurrency gradually |
+| `403` or `429`, body mentions secondary rate limit, `retry-after: N` present | Secondary limit tripped | Do not retry before N seconds; use the later of that deadline and jittered backoff, then jitter re-entry, drop concurrency to 1, and re-raise it gradually |
 | `403` or `429`, `x-ratelimit-remaining: 0` | Primary bucket exhausted (bucket named in `x-ratelimit-resource`) | Sleep until `x-ratelimit-reset` (epoch seconds, UTC); only that bucket's queue pauses |
 | `403`/`429`, secondary-limit message, no `retry-after`, `remaining > 0` | Secondary limit (points/min, CPU, or content-creation) | Wait ≥ 60 s, exponential backoff, bounded retries; slow mutative cadence to ≥ 1 s spacing |
 | GraphQL HTTP `200` with `errors[]` about rate limiting, `x-ratelimit-remaining: 0` | GraphQL primary exhausted despite 200 status | Same as primary: sleep until `x-ratelimit-reset`; do not count the response as data |

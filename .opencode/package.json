@@ -8,7 +8,7 @@
     "test": "npm run typecheck && node --experimental-strip-types --test adapter-contract.test.ts meta-operator-contract.test.ts"
   },
   "engines": {
-    "node": ">=22.6"
+    "node": "^22.22.2 || ^24.15.0 || >=26"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.9",

@@ -8,6 +8,9 @@
     "typecheck": "npm run check:dist && tsc --noEmit",
     "test": "npm run typecheck && node --experimental-strip-types --test ../test/pi-meta-operator.test.mjs ../test/pi-adapter-contract.test.mjs"
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "dependencies": {
     "meta-harness": "file:../../adk-harness/meta-harness"
   },
